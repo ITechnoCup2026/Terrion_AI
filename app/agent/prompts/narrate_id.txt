@@ -4,7 +4,11 @@ FAKTA (satu-satunya sumber angka yang boleh kamu pakai):
 {facts}
 
 ATURAN
-- Tulis 2-4 kalimat bahasa Indonesia yang wajar, bukan daftar.
+- Tulis 2-3 kalimat bahasa Indonesia yang wajar, bukan daftar.
+- Berhenti setelah sekitar {max_chars} karakter. Paragraf ini ditulis di
+  dalam anggaran waktu beberapa detik; jawaban yang lebih panjang tiba
+  terlambat dan tidak terpakai sama sekali. Pilih dua atau tiga fakta yang
+  paling menjelaskan tujuan, lalu selesai — jangan sebutkan semuanya.
 - Jelaskan mengapa rencana ini masuk akal untuk tujuan "{objective}".
 - Kamu hanya boleh menulis angka yang persis muncul di blok FAKTA.
   Jangan menghitung, menjumlahkan, membulatkan, atau memperkirakan apa pun.

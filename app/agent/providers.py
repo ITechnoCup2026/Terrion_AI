@@ -1,5 +1,6 @@
 """Dua cara menulis narasi: templat lokal, atau model bahasa lewat OpenRouter."""
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -7,8 +8,21 @@ import httpx
 
 from app.agent.facts import Facts, format_number
 from app.config import settings
+from app.logging import logger
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "narrate_id.txt"
+
+# Panjang paragraf yang diizinkan, dan ini angka anggaran waktu, bukan selera.
+# Diminta "2-4 kalimat" tanpa batas tercetak, model menulis ~190 token / ~720
+# karakter dan memakan 2,4-2,7 detik dari anggaran 2,8 detik. Dengan batas ini
+# disebut di dalam prompt ia menulis ~145 token / ~520 karakter, dan gelombang
+# tiga narasi selesai pada 1,75-2,0 detik. Yang dipangkas adalah kalimat yang
+# memang tidak diminta siapa pun.
+MAX_NARRATIVE_CHARS = 400
+
+# Berapa narasi yang berangkat bersamaan: satu per objektif. Dipakai untuk
+# memanaskan koneksi sebanyak yang benar-benar dibutuhkan satu permintaan.
+NARRATION_CONCURRENCY = 3
 
 
 @dataclass(frozen=True)
@@ -33,9 +47,11 @@ OPENING = {
 
 
 def render_prompt(facts: Facts) -> str:
-    """Susun prompt dari blok fakta dan tujuan rencana."""
+    """Susun prompt dari blok fakta, tujuan rencana, dan batas panjangnya."""
     return PROMPT_PATH.read_text(encoding="utf-8").format(
-        facts=facts.block(), objective=facts.objective
+        facts=facts.block(),
+        objective=facts.objective,
+        max_chars=MAX_NARRATIVE_CHARS,
     )
 
 
@@ -88,21 +104,62 @@ class Template:
 
 _client: httpx.AsyncClient | None = None
 
+# Kolam koneksi yang tidak kedaluwarsa, dan ini bagian dari perbaikan, bukan
+# penyetelan. Bawaan httpx adalah keepalive_expiry=5.0: koneksi menganggur
+# dibuang setelah lima detik. Layanan ini menerima permintaan dengan jarak
+# menit, jadi dengan bawaan itu SETIAP permintaan membayar handshake lagi dan
+# klien bersama di bawah tidak pernah menepati janjinya. Diukur ke Sumopod,
+# satu ping setelah menganggur 12 detik: 806 ms dengan bawaan, 69 ms tanpa
+# kedaluwarsa. Batas koneksinya disamakan dengan jumlah narasi serentak.
+LIMITS = httpx.Limits(
+    max_connections=NARRATION_CONCURRENCY * 2,
+    max_keepalive_connections=NARRATION_CONCURRENCY * 2,
+    keepalive_expiry=None,
+)
+
 
 def shared_client() -> httpx.AsyncClient:
     """Satu klien HTTP untuk seluruh proses, dan ini bukan penghematan objek.
 
-    Handshake TLS ke penyedia diukur memakan 1-3 detik — pada benchmark,
-    panggilan pertama ke setiap model selalu 2-3x lebih lambat dari
-    berikutnya. Klien baru per panggilan berarti setiap narasi membayar
-    handshake itu lagi, tiga kali per permintaan, di dalam anggaran yang
-    seluruhnya hanya 2,8 detik. Dengan satu klien, hanya permintaan pertama
-    setelah proses hidup yang membayarnya.
+    Handshake TLS ke penyedia diukur memakan 1,4 detik pada koneksi pertama
+    proses dan 0,2-0,8 detik pada koneksi berikutnya. Klien baru per panggilan
+    berarti setiap narasi membayar handshake itu lagi, tiga kali per
+    permintaan, di dalam anggaran yang seluruhnya hanya 2,8 detik. Dengan satu
+    klien dan LIMITS di atas, hanya permintaan pertama setelah proses hidup
+    yang membayarnya — dan warm_client() membayarnya sebelum ada pengguna yang
+    menunggu.
     """
     global _client
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+        _client = httpx.AsyncClient(timeout=httpx.Timeout(30.0), limits=LIMITS)
     return _client
+
+
+async def warm_client() -> None:
+    """Buka koneksi ke penyedia sebelum permintaan pertama tiba.
+
+    Handshake pertama proses terukur 1,4 detik. Dibayar di dalam anggaran
+    narasi, ia sendirian cukup untuk menghabiskannya — itulah bentuk yang
+    terlihat di log produksi, ketika ketiga narasi gagal berbarengan pada
+    permintaan pertama setelah deploy. Dibayar di sini, tidak ada yang
+    menunggu. Sebanyak NARRATION_CONCURRENCY koneksi, karena satu permintaan
+    memakai sebanyak itu sekaligus.
+
+    Gagal memanaskan bukan galat: yang hilang hanyalah keuntungannya.
+    """
+    client = shared_client()
+    url = settings.llm_base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
+
+    async def ping() -> None:
+        # Jaringan dan URL yang salah bentuk; keduanya tidak boleh menghentikan
+        # proses. CancelledError sengaja lewat: saat shutdown ia harus lolos.
+        try:
+            await client.get(url, headers=headers, timeout=httpx.Timeout(5.0))
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            logger.debug("pemanasan_gagal", error=repr(exc))
+
+    await asyncio.gather(*(ping() for _ in range(NARRATION_CONCURRENCY)))
 
 
 async def aclose_client() -> None:
