@@ -237,6 +237,58 @@ pendapatan petani sebesar Y". Tidak satu pun diuji lapangan.
 
 ---
 
+## 9. Penerapan
+
+Layanan ini boleh tidak ter-deploy sama sekali — lihat catatan di kepala berkas.
+Yang berikut hanya menghemat satu hop kalau ada URL hidup untuk diisikan ke
+`AI_SERVICE_URL` di sisi Go.
+
+**Railway.** `railway.json` sudah ada, jadi builder `DOCKERFILE`, health check
+`/health`, dan satu replika sudah terpasang tanpa klik apa pun:
+
+```bash
+npm i -g @railway/cli
+railway login
+railway init            # atau: railway link, kalau proyeknya sudah dibuat
+railway up
+railway domain          # cetak URL publik
+```
+
+Ubah tiga variabel di dashboard atau lewat CLI, dan **jangan** menyetel `PORT`
+sendiri — Railway menyuntikkannya dan memakai nilai yang sama untuk health
+check:
+
+```bash
+railway variables --set AI_SERVICE_TOKEN=<token yang sama dengan sisi Go>                   --set LLM_PROVIDER=template                   --set LOG_LEVEL=INFO
+```
+
+`AI_SERVICE_TOKEN` yang kosong menolak **setiap** permintaan dengan `401`. Itu
+bawaan yang aman kalau lupa diisi, tetapi dari sisi Go bentuknya adalah circuit
+breaker yang langsung terbuka dan `"engine": "fallback"` selamanya — jadi kalau
+rencana tidak pernah datang dari layanan ini, variabel itu yang pertama dilihat.
+
+Sesudah domain terbit, buktikan keduanya hidup:
+
+```bash
+curl -s https://<domain>/health
+curl -s https://<domain>/ready
+```
+
+**Fly.io.** `fly.toml` juga sudah ada (region `sin`, 512 MB, mesin berhenti
+sendiri saat menganggur — dingin selama beberapa detik pada permintaan pertama):
+
+```bash
+fly launch --copy-config --no-deploy
+fly secrets set AI_SERVICE_TOKEN=<token>
+fly deploy
+```
+
+Keduanya memakai `Dockerfile` yang sama. Port dibaca dari `$PORT` bila ada dan
+jatuh ke 8080 bila tidak, jadi tidak ada berkas yang perlu dibedakan antar
+penyedia.
+
+---
+
 ## Status
 
 Fase 1 selesai: kontrak, solver greedy, Monte Carlo, narasi templat, dan 42 uji

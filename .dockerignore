@@ -1,0 +1,19 @@
+# Konteks build hanya perlu tiga hal: pyproject.toml, README.md, dan app/.
+# Sisanya ikut terkirim ke daemon kalau tidak disebut di sini — .venv sendiri
+# ratusan MB, dan di Railway itu berarti unggahan konteks yang lambat.
+.git
+.gitignore
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+.env
+tests
+docs
+fly.toml
+railway.json
+.dockerignore
