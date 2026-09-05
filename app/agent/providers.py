@@ -86,49 +86,122 @@ class Template:
         return Draft(template_narrative(facts))
 
 
-class OpenRouter:
-    """Penyedia jarak jauh, opsional, dengan daftar model cadangan bawaan."""
+_client: httpx.AsyncClient | None = None
+
+
+def shared_client() -> httpx.AsyncClient:
+    """Satu klien HTTP untuk seluruh proses, dan ini bukan penghematan objek.
+
+    Handshake TLS ke penyedia diukur memakan 1-3 detik — pada benchmark,
+    panggilan pertama ke setiap model selalu 2-3x lebih lambat dari
+    berikutnya. Klien baru per panggilan berarti setiap narasi membayar
+    handshake itu lagi, tiga kali per permintaan, di dalam anggaran yang
+    seluruhnya hanya 2,8 detik. Dengan satu klien, hanya permintaan pertama
+    setelah proses hidup yang membayarnya.
+    """
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
+    return _client
+
+
+async def aclose_client() -> None:
+    """Tutup klien bersama saat proses berhenti."""
+    global _client
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+    _client = None
+
+
+class OpenAICompatible:
+    """Penyedia mana pun yang berbicara skema /chat/completions milik OpenAI.
+
+    Ini yang dipakai untuk Sumopod. Badan permintaannya sengaja polos: hanya
+    field yang ada di spesifikasi OpenAI. Sumopod berjalan di atas LiteLLM,
+    dan LiteLLM meneruskan parameter tak dikenal ke penyedia hulu, yang
+    menolaknya dengan 400 "Unrecognized request argument supplied". Diuji
+    langsung: `models` dan `reasoning` masing-masing 400, payload polos 200.
+    """
 
     is_remote = True
 
-    async def narrate(self, facts: Facts) -> Draft:
-        """Minta satu paragraf ke model bahasa; keluarannya belum dipercaya."""
-        payload = {
+    def payload(self, facts: Facts) -> dict:
+        """Badan permintaan yang setiap penyedia skema OpenAI pasti terima."""
+        return {
             "model": settings.llm_model,
             "temperature": 0.2,
             "seed": facts.seed,
             "max_tokens": settings.llm_max_tokens,
-            # Seluruh model gratis di katalog OpenRouter hari ini adalah
-            # model reasoning, dan bawaannya berpikir sebelum menjawab.
-            # Tanpa baris ini minimax-m2.7 menghabiskan 207 dari 220 token
-            # untuk berpikir lalu mengembalikan konten KOSONG. Perhatikan
-            # "enabled": False, bukan "exclude": True — yang kedua hanya
-            # menyembunyikan token reasoning, tetap membakarnya.
-            "reasoning": {"enabled": False},
             "messages": [{"role": "user", "content": render_prompt(facts)}],
         }
+
+    def headers(self) -> dict:
+        """Kredensial saja; tidak ada penyedia yang menolak header ini."""
+        return {"Authorization": f"Bearer {settings.llm_api_key}"}
+
+    async def narrate(self, facts: Facts) -> Draft:
+        """Minta satu paragraf ke model bahasa; keluarannya belum dipercaya."""
+        response = await shared_client().post(
+            settings.llm_base_url.rstrip("/") + "/chat/completions",
+            json=self.payload(facts),
+            headers=self.headers(),
+        )
+        response.raise_for_status()
+        choice = response.json()["choices"][0]
+        return Draft(
+            text=(choice["message"].get("content") or "").strip(),
+            truncated=choice.get("finish_reason") == "length",
+        )
+
+
+class OpenRouter(OpenAICompatible):
+    """OpenAI-compatible, plus tiga hal yang hanya OpenRouter yang mengerti.
+
+    Ketiganya ditolak 400 oleh penyedia lain, jadi mereka tinggal di sini
+    dan bukan di kelas induknya.
+    """
+
+    def payload(self, facts: Facts) -> dict:
+        """Tambahkan daftar model cadangan dan pematian reasoning."""
+        body = super().payload(facts)
+        # Seluruh model :free di katalog OpenRouter adalah model reasoning dan
+        # bawaannya berpikir sebelum menjawab. Tanpa baris ini minimax-m2.7
+        # menghabiskan 207 dari 220 token untuk berpikir lalu mengembalikan
+        # konten KOSONG. "enabled": False, bukan "exclude": True — yang kedua
+        # hanya menyembunyikan token reasoning, tetap membakarnya.
+        body["reasoning"] = {"enabled": False}
+
         fallbacks = [m.strip() for m in settings.llm_fallback_models.split(",") if m.strip()]
         if fallbacks:
-            payload["models"] = [settings.llm_model, *fallbacks]
+            # Routing cadangan milik OpenRouter sendiri. Penyedia lain tidak
+            # punya padanannya, dan mencoba ulang secara manual berarti
+            # membayar anggaran waktu dua kali — jadi di luar OpenRouter,
+            # LLM_FALLBACK_MODELS memang tidak dipakai.
+            body["models"] = [settings.llm_model, *fallbacks]
+        return body
 
-        headers = {
-            "Authorization": f"Bearer {settings.llm_api_key}",
+    def headers(self) -> dict:
+        """Atribusi yang diminta OpenRouter dari aplikasi pemanggil."""
+        return super().headers() | {
             "HTTP-Referer": "https://github.com/ITechnoCup2026",
             "X-Title": "Terrion",
         }
 
-        async with httpx.AsyncClient(base_url=settings.llm_base_url) as client:
-            response = await client.post("/chat/completions", json=payload, headers=headers)
-            response.raise_for_status()
-            choice = response.json()["choices"][0]
-            return Draft(
-                text=(choice["message"].get("content") or "").strip(),
-                truncated=choice.get("finish_reason") == "length",
-            )
+
+REMOTE = {
+    "openrouter": OpenRouter,
+    "sumopod": OpenAICompatible,
+    "openai": OpenAICompatible,
+}
 
 
 def get_provider(name: str):
-    """Pilih penyedia menurut konfigurasi; apa pun selain openrouter berarti templat."""
-    if name == "openrouter" and settings.llm_api_key:
-        return OpenRouter()
+    """Pilih penyedia menurut konfigurasi; tanpa kunci, selalu templat.
+
+    Nama yang tidak dikenal jatuh ke templat dan bukan galat: layanan yang
+    salah konfigurasi harus tetap menjawab dengan angka yang benar.
+    """
+    factory = REMOTE.get(name)
+    if factory and settings.llm_api_key:
+        return factory()
     return Template()

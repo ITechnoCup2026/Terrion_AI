@@ -106,3 +106,49 @@ def test_a_provider_that_hangs_costs_one_budget_not_three(monkeypatch, plans, pr
     assert elapsed < 0.3 * len(plans), (
         f"{elapsed:.2f}s untuk {len(plans)} rencana — terlihat berurutan, bukan serentak"
     )
+
+
+def test_the_plain_payload_carries_nothing_a_gateway_can_reject(plans, problem):
+    """Regresi terhadap 400 yang benar-benar terjadi.
+
+    Sumopod berjalan di atas LiteLLM, yang meneruskan parameter tak dikenal ke
+    penyedia hulu. Diuji langsung ke Sumopod: `models` dan `reasoning`
+    masing-masing dijawab 400 "Unrecognized request argument supplied",
+    sementara payload polos dijawab 200. Jadi apa pun yang khas satu penyedia
+    tidak boleh menetes ke kelas induknya.
+    """
+    from app.agent.providers import OpenAICompatible
+
+    facts = Facts.from_plan(plans[0], problem)
+    provider = OpenAICompatible()
+
+    assert set(provider.payload(facts)) == {
+        "model", "temperature", "seed", "max_tokens", "messages",
+    }
+    assert set(provider.headers()) == {"Authorization"}
+
+
+def test_openrouter_keeps_its_own_parameters_to_itself(monkeypatch, plans, problem):
+    from app.agent.providers import OpenRouter
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_model", "model-utama")
+    monkeypatch.setattr(settings, "llm_fallback_models", "cadangan-a, cadangan-b")
+    body = OpenRouter().payload(Facts.from_plan(plans[0], problem))
+
+    assert body["reasoning"] == {"enabled": False}
+    assert body["models"] == ["model-utama", "cadangan-a", "cadangan-b"]
+    assert "HTTP-Referer" in OpenRouter().headers()
+
+
+def test_the_provider_name_decides_the_dialect(monkeypatch):
+    from app.agent import providers
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "kunci-palsu")
+    assert type(providers.get_provider("sumopod")) is providers.OpenAICompatible
+    assert type(providers.get_provider("openrouter")) is providers.OpenRouter
+    assert type(providers.get_provider("entah-apa")) is providers.Template
+
+    monkeypatch.setattr(settings, "llm_api_key", "")
+    assert type(providers.get_provider("sumopod")) is providers.Template

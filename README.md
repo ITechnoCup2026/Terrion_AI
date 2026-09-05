@@ -232,17 +232,19 @@ Dua hal yang wajib disebut sendiri, sebelum ditemukan orang lain.
    yang dilaporkan karena itu optimistis. Perbaikannya sudah diketahui — satu
    faktor pergeseran musim bersama per undian — dan dicatat sebagai pekerjaan v2.
 
-3. **Lapis narasi LLM belum muat dalam anggaran waktunya.** Diukur terhadap
-   OpenRouter tier gratis: panggilan yang berhasil memakan 1,8-7,2 detik,
-   sementara sisi Go menutup panggilan pada 3.500 ms. Dengan
-   `LLM_TIMEOUT_MS=2000` seluruh narasi habis waktu dan jatuh ke templat —
-   benar, tetapi bukan yang dimaksud. Rantainya sendiri sudah terbukti utuh:
-   dengan anggaran dilonggarkan, ketiga rencana kembali sebagai
-   `narrative_source: "llm"` dengan `degraded` kosong. Yang tersisa adalah
-   pilihan antara menaikkan `AI_SERVICE_TIMEOUT_MS` di sisi Go atau memakai
-   model berbayar yang lebih cepat. Sampelnya kecil (belasan panggilan),
-   dan mutu prosanya sedang: model pernah menulis "lahan 5 hektar" untuk
-   "5 lahan" — penjaganya memeriksa angka, bukan satuan.
+3. **Narasi LLM sekarang berjalan, tetapi angkanya kecil dan sampelnya
+   kecil.** Lewat Sumopod dengan `gpt-5.4-nano`: 18 dari 18 narasi kembali
+   sebagai `narrative_source: "llm"` dengan `degraded` kosong, pada 1.898-2.473
+   ms dinding — di dalam `AI_SERVICE_TIMEOUT_MS=3500` milik Go. Yang mengukur
+   itu belasan permintaan terhadap satu berkas fikstur, dari satu lokasi
+   jaringan, bukan beban sungguhan dari Railway. Perlakukan sebagai bukti
+   bahwa rantainya bekerja, bukan sebagai jaminan mutu layanan.
+
+   Penjaganya juga terbukti bukan hiasan: `gpt-4.1-nano` berulang kali menulis
+   "13 minggu" untuk fakta yang berbunyi "9 minggu", dan seluruh paragrafnya
+   dibuang. Yang tidak diperiksa penjaga adalah jumlah yang ditulis dengan
+   huruf — ia hanya membaca token digit — sehingga prompt secara eksplisit
+   melarang model menulis jumlah sebagai kata.
 
 **Yang tidak boleh diklaim tentang layanan ini:** "akurasi X%", "meningkatkan
 pendapatan petani sebesar Y". Tidak satu pun diuji lapangan.

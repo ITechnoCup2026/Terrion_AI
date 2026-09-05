@@ -2,12 +2,14 @@
 
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.agent.explain import narrate_all
+from app.agent.providers import aclose_client
 from app.config import settings
 from app.contracts.v1 import (
     CONTRACT_MAJOR,
@@ -25,7 +27,21 @@ from app.solver.metrics import plan_result
 
 configure_logging(settings.log_level)
 
-app = FastAPI(title="Terrion AI", version="1.0.0", docs_url="/docs")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Tidak ada yang perlu disiapkan; yang ada perlu ditutup.
+
+    Klien HTTP ke penyedia LLM dipakai bersama seluruh proses supaya
+    handshake TLS tidak dibayar ulang tiap narasi. Ia harus ditutup rapi
+    saat proses berhenti, kalau tidak koneksi yang menggantung membuat
+    SIGTERM saat redeploy terasa jauh lebih lama dari seharusnya.
+    """
+    yield
+    await aclose_client()
+
+
+app = FastAPI(title="Terrion AI", version="1.0.0", docs_url="/docs", lifespan=lifespan)
 
 
 def envelope(code: str, message: str) -> dict:
