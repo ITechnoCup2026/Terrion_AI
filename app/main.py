@@ -1,5 +1,6 @@
 """Aplikasi FastAPI: satu endpoint kerja, dua endpoint operasional."""
 
+import asyncio
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -9,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.agent.explain import narrate_all
-from app.agent.providers import aclose_client
+from app.agent.providers import aclose_client, get_provider, warm_client
 from app.config import settings
 from app.contracts.v1 import (
     CONTRACT_MAJOR,
@@ -30,14 +31,30 @@ configure_logging(settings.log_level)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Tidak ada yang perlu disiapkan; yang ada perlu ditutup.
+    """Panaskan koneksi ke penyedia lebih dulu, lalu tutup rapi di akhir.
 
-    Klien HTTP ke penyedia LLM dipakai bersama seluruh proses supaya
-    handshake TLS tidak dibayar ulang tiap narasi. Ia harus ditutup rapi
-    saat proses berhenti, kalau tidak koneksi yang menggantung membuat
-    SIGTERM saat redeploy terasa jauh lebih lama dari seharusnya.
+    Handshake TLS pertama sebuah proses terukur 1,4 detik. Kalau ia dibayar
+    di dalam permintaan pertama, ia dibayar dari anggaran narasi yang
+    seluruhnya hanya 2,8 detik — dan itulah yang terlihat di log produksi:
+    ketiga narasi gagal berbarengan tepat pada permintaan pertama setelah
+    deploy, lalu permintaan berikutnya baik-baik saja. Dipanaskan di sini,
+    handshake itu dibayar ketika belum ada yang menunggu.
+
+    Sebagai tugas latar, bukan di jalur startup: penyedia yang sedang
+    bermasalah tidak boleh menahan proses ini dari melayani /health.
+
+    Klien yang sama dipakai seluruh proses dan harus ditutup rapi saat
+    berhenti, kalau tidak koneksi yang menggantung membuat SIGTERM saat
+    redeploy terasa jauh lebih lama dari seharusnya.
     """
+    warming = None
+    if get_provider(settings.llm_provider).is_remote:
+        warming = asyncio.create_task(warm_client())
+
     yield
+
+    if warming is not None:
+        warming.cancel()
     await aclose_client()
 
 
