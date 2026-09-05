@@ -1,0 +1,72 @@
+{
+  "contract_version": "1.0",
+  "request_id": "5a1f0c9e-3c2a-4b3e-9f5a-77c0e2b1d004",
+  "solver": "greedy",
+  "solver_version": "1.0.0",
+  "elapsed_ms": 0,
+  "plans": [
+    {
+      "objective": "aman",
+      "candidate_ids": [
+        "c001",
+        "c009",
+        "c013",
+        "c021",
+        "c022"
+      ],
+      "metrics": {
+        "peak_tonnes_p50": 7.04,
+        "peak_tonnes_p90": 7.9,
+        "total_tonnes": 23.44,
+        "gross_value": 247429000.0,
+        "demand_covered_kg": 3670
+      },
+      "narrative": "Rencana ini disusun agar panen tidak menumpuk di satu minggu. Sebanyak 5 lahan ditanami dengan 4 varietas, sehingga panen tersebar di 13 minggu, dari pekan 2026-12-14 sampai pekan 2027-03-15. Dari perkiraan total 23,4 ton, puncak panen mingguan berada di sekitar 7,0 ton, dan sembilan dari sepuluh musim tetap di bawah 7,9 ton. Kapasitas tampung koperasi adalah 12,5 ton per minggu. Rencana ini menutup 3.670 kg permintaan pembeli. Angka di atas adalah proyeksi, bukan kepastian.",
+      "narrative_source": "template"
+    },
+    {
+      "objective": "pendapatan",
+      "candidate_ids": [
+        "c004",
+        "c007",
+        "c014",
+        "c020",
+        "c022"
+      ],
+      "metrics": {
+        "peak_tonnes_p50": 7.65,
+        "peak_tonnes_p90": 8.58,
+        "total_tonnes": 24.77,
+        "gross_value": 254147000.0,
+        "demand_covered_kg": 5613
+      },
+      "narrative": "Rencana ini disusun untuk mengejar nilai panen tertinggi. Sebanyak 5 lahan ditanami dengan 5 varietas, sehingga panen tersebar di 12 minggu, dari pekan 2026-12-14 sampai pekan 2027-03-01. Dari perkiraan total 24,8 ton, puncak panen mingguan berada di sekitar 7,7 ton, dan sembilan dari sepuluh musim tetap di bawah 8,6 ton. Kapasitas tampung koperasi adalah 12,5 ton per minggu. Rencana ini menutup 5.613 kg permintaan pembeli. Angka di atas adalah proyeksi, bukan kepastian.",
+      "narrative_source": "template"
+    },
+    {
+      "objective": "pasar",
+      "candidate_ids": [
+        "c001",
+        "c007",
+        "c014",
+        "c017",
+        "c022"
+      ],
+      "metrics": {
+        "peak_tonnes_p50": 8.12,
+        "peak_tonnes_p90": 12.74,
+        "total_tonnes": 23.89,
+        "gross_value": 249934000.0,
+        "demand_covered_kg": 8300
+      },
+      "narrative": "Rencana ini disusun untuk memenuhi permintaan pembeli yang sudah ada. Sebanyak 5 lahan ditanami dengan 3 varietas, sehingga panen tersebar di 9 minggu, dari pekan 2026-12-14 sampai pekan 2027-02-08. Dari perkiraan total 23,9 ton, puncak panen mingguan berada di sekitar 8,1 ton, dan sembilan dari sepuluh musim tetap di bawah 12,7 ton. Kapasitas tampung koperasi adalah 12,5 ton per minggu. Rencana ini menutup 8.300 kg permintaan pembeli. Angka di atas adalah proyeksi, bukan kepastian.",
+      "narrative_source": "template"
+    }
+  ],
+  "diagnostics": {
+    "evaluations": 148,
+    "monte_carlo_draws": 2000,
+    "objective_status": "HEURISTIC",
+    "degraded": []
+  }
+}

@@ -1,0 +1,14 @@
+Kamu menulis satu paragraf untuk pengurus koperasi tani di Indonesia.
+
+FAKTA (satu-satunya sumber angka yang boleh kamu pakai):
+{facts}
+
+ATURAN
+- Tulis 2-4 kalimat bahasa Indonesia yang wajar, bukan daftar.
+- Jelaskan mengapa rencana ini masuk akal untuk tujuan "{objective}".
+- Kamu hanya boleh menulis angka yang persis muncul di blok FAKTA.
+  Jangan menghitung, menjumlahkan, membulatkan, atau memperkirakan apa pun.
+- Jangan menyebut nama orang, desa, atau koordinat. Kamu tidak memilikinya.
+- Jangan menjanjikan hasil. Ini proyeksi, bukan kepastian.
+
+Tulis paragrafnya saja, tanpa judul dan tanpa pembuka.
