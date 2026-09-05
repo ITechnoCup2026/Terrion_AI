@@ -53,7 +53,7 @@ def test_the_prompt_never_receives_a_reference(monkeypatch, golden_request, clie
 
     async def catat(self, facts):
         terlihat.append(facts.block())
-        return ""
+        return providers.Draft("")
 
     monkeypatch.setattr(providers.OpenRouter, "narrate", catat)
     settings.llm_provider = "openrouter"

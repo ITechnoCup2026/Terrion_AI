@@ -1,7 +1,7 @@
 import pytest
 
 from app.agent.facts import Facts, format_number
-from app.agent.guard import numbers_are_grounded, ungrounded_numbers
+from app.agent.guard import numbers_are_grounded, rejection_reason, ungrounded_numbers
 from app.agent.providers import template_narrative
 
 FACTS = Facts(
@@ -50,3 +50,30 @@ def test_the_template_narrative_always_passes_its_own_guard(objective):
 def test_dates_in_the_block_are_allowed(golden_request):
     assert "2027" in FACTS.allowed_numbers()
     assert "04" in FACTS.allowed_numbers()
+
+
+def test_an_empty_answer_is_rejected():
+    """Justru karena teks kosong TIDAK memuat angka liar, ia harus dijegal lebih dulu."""
+    assert numbers_are_grounded("", FACTS.allowed_numbers())
+    assert rejection_reason("", FACTS.allowed_numbers()) == "narrative_too_short"
+
+
+def test_whitespace_only_is_rejected():
+    assert rejection_reason("   \n\t  ", FACTS.allowed_numbers()) == "narrative_too_short"
+
+
+def test_a_truncated_answer_is_rejected_before_its_numbers_are_read():
+    text = template_narrative(FACTS)
+
+    assert rejection_reason(text, FACTS.allowed_numbers()) is None
+    assert rejection_reason(text, FACTS.allowed_numbers(), truncated=True) == "truncated"
+
+
+def test_a_good_answer_has_no_reason_to_be_rejected():
+    assert rejection_reason(template_narrative(FACTS), FACTS.allowed_numbers()) is None
+
+
+def test_an_ungrounded_number_still_names_itself():
+    text = template_narrative(FACTS) + " Naik 173 persen."
+
+    assert rejection_reason(text, FACTS.allowed_numbers()) == "ungrounded_numbers"

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     llm_model: str = "meta-llama/llama-3.3-70b-instruct:free"
     llm_fallback_models: str = ""
     llm_timeout_ms: int = 2000
+    llm_max_tokens: int = 400
     solver_time_limit_ms: int = 1000
     monte_carlo_draws: int = 2000
     log_level: str = "INFO"

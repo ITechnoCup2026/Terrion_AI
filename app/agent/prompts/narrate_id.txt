@@ -8,6 +8,11 @@ ATURAN
 - Jelaskan mengapa rencana ini masuk akal untuk tujuan "{objective}".
 - Kamu hanya boleh menulis angka yang persis muncul di blok FAKTA.
   Jangan menghitung, menjumlahkan, membulatkan, atau memperkirakan apa pun.
+- Salin angka apa adanya, termasuk koma desimalnya: 48,6 bukan 48.6 atau 49.
+- Perbandingan dan urutan ditulis dengan huruf, bukan angka: "sembilan dari
+  sepuluh musim", bukan "9 dari 10"; "tiga varietas", bukan "3 varietas".
+  Angka yang benar tetapi tidak ada di blok FAKTA membuat seluruh
+  paragrafmu dibuang.
 - Jangan menyebut nama orang, desa, atau koordinat. Kamu tidak memilikinya.
 - Jangan menjanjikan hasil. Ini proyeksi, bukan kepastian.
 

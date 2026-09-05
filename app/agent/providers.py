@@ -1,5 +1,6 @@
 """Dua cara menulis narasi: templat lokal, atau model bahasa lewat OpenRouter."""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -8,6 +9,21 @@ from app.agent.facts import Facts, format_number
 from app.config import settings
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "narrate_id.txt"
+
+
+@dataclass(frozen=True)
+class Draft:
+    """Narasi mentah beserta satu hal yang tidak terbaca dari teksnya.
+
+    `truncated` datang dari finish_reason, bukan dari isi teks. Jawaban
+    yang habis di tengah kalimat tetap tampak wajar dan tetap bisa lolos
+    pemeriksaan angka, jadi satu-satunya cara mengetahuinya adalah
+    bertanya pada penyedia.
+    """
+
+    text: str
+    truncated: bool = False
+
 
 OPENING = {
     "aman": "Rencana ini disusun agar panen tidak menumpuk di satu minggu.",
@@ -65,9 +81,9 @@ class Template:
 
     is_remote = False
 
-    async def narrate(self, facts: Facts) -> str:
-        """Kembalikan kalimat templat."""
-        return template_narrative(facts)
+    async def narrate(self, facts: Facts) -> Draft:
+        """Kembalikan kalimat templat; ia tidak pernah terpotong."""
+        return Draft(template_narrative(facts))
 
 
 class OpenRouter:
@@ -75,13 +91,20 @@ class OpenRouter:
 
     is_remote = True
 
-    async def narrate(self, facts: Facts) -> str:
+    async def narrate(self, facts: Facts) -> Draft:
         """Minta satu paragraf ke model bahasa; keluarannya belum dipercaya."""
         payload = {
             "model": settings.llm_model,
             "temperature": 0.2,
             "seed": facts.seed,
-            "max_tokens": 220,
+            "max_tokens": settings.llm_max_tokens,
+            # Seluruh model gratis di katalog OpenRouter hari ini adalah
+            # model reasoning, dan bawaannya berpikir sebelum menjawab.
+            # Tanpa baris ini minimax-m2.7 menghabiskan 207 dari 220 token
+            # untuk berpikir lalu mengembalikan konten KOSONG. Perhatikan
+            # "enabled": False, bukan "exclude": True — yang kedua hanya
+            # menyembunyikan token reasoning, tetap membakarnya.
+            "reasoning": {"enabled": False},
             "messages": [{"role": "user", "content": render_prompt(facts)}],
         }
         fallbacks = [m.strip() for m in settings.llm_fallback_models.split(",") if m.strip()]
@@ -97,7 +120,11 @@ class OpenRouter:
         async with httpx.AsyncClient(base_url=settings.llm_base_url) as client:
             response = await client.post("/chat/completions", json=payload, headers=headers)
             response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"].strip()
+            choice = response.json()["choices"][0]
+            return Draft(
+                text=(choice["message"].get("content") or "").strip(),
+                truncated=choice.get("finish_reason") == "length",
+            )
 
 
 def get_provider(name: str):

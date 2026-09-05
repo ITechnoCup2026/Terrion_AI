@@ -232,6 +232,18 @@ Dua hal yang wajib disebut sendiri, sebelum ditemukan orang lain.
    yang dilaporkan karena itu optimistis. Perbaikannya sudah diketahui — satu
    faktor pergeseran musim bersama per undian — dan dicatat sebagai pekerjaan v2.
 
+3. **Lapis narasi LLM belum muat dalam anggaran waktunya.** Diukur terhadap
+   OpenRouter tier gratis: panggilan yang berhasil memakan 1,8-7,2 detik,
+   sementara sisi Go menutup panggilan pada 3.500 ms. Dengan
+   `LLM_TIMEOUT_MS=2000` seluruh narasi habis waktu dan jatuh ke templat —
+   benar, tetapi bukan yang dimaksud. Rantainya sendiri sudah terbukti utuh:
+   dengan anggaran dilonggarkan, ketiga rencana kembali sebagai
+   `narrative_source: "llm"` dengan `degraded` kosong. Yang tersisa adalah
+   pilihan antara menaikkan `AI_SERVICE_TIMEOUT_MS` di sisi Go atau memakai
+   model berbayar yang lebih cepat. Sampelnya kecil (belasan panggilan),
+   dan mutu prosanya sedang: model pernah menulis "lahan 5 hektar" untuk
+   "5 lahan" — penjaganya memeriksa angka, bukan satuan.
+
 **Yang tidak boleh diklaim tentang layanan ini:** "akurasi X%", "meningkatkan
 pendapatan petani sebesar Y". Tidak satu pun diuji lapangan.
 
