@@ -7,18 +7,31 @@ membuat kedua mesin bisa dibandingkan di harness evaluasi.
 from app.contracts.v1 import Candidate
 from app.problem import Problem
 from app.solver.metrics import Measures, measure_for
-from app.solver.objectives import USES_WORST_CASE, Bounds, criterion_value, scalarise
+from app.solver.objectives import (
+    USES_WORST_CASE,
+    Bounds,
+    Weights,
+    criterion_value,
+    scalarise,
+)
 
 TOLERANCE = 1e-12
 IMPROVE_PASSES = 3
 
 
 def _score(
-    chosen: list[Candidate], problem: Problem, objective: str, bounds: Bounds
+    chosen: list[Candidate],
+    problem: Problem,
+    objective: str,
+    bounds: Bounds,
+    weights: Weights | None = None,
 ) -> float:
     """Skor terskalarisasi sebuah rencana untuk satu objektif."""
     return scalarise(
-        measure_for(tuple(chosen), problem, USES_WORST_CASE[objective]), objective, bounds
+        measure_for(tuple(chosen), problem, USES_WORST_CASE[objective]),
+        objective,
+        bounds,
+        weights,
     )
 
 
@@ -39,7 +52,7 @@ def probe(problem: Problem, criterion: str, score_on_p90: bool = False) -> Measu
 
 
 def greedy(
-    problem: Problem, objective: str, bounds: Bounds
+    problem: Problem, objective: str, bounds: Bounds, weights: Weights | None = None
 ) -> tuple[list[Candidate], int]:
     """Pilih satu kandidat terbaik per lahan, menurut urutan lahan yang tetap."""
     chosen: list[Candidate] = []
@@ -48,7 +61,7 @@ def greedy(
     for plot_ref in problem.plot_refs:
         best, best_score = None, float("-inf")
         for candidate in problem.by_plot[plot_ref]:
-            score = _score(chosen + [candidate], problem, objective, bounds)
+            score = _score(chosen + [candidate], problem, objective, bounds, weights)
             evaluations += 1
             if score > best_score + TOLERANCE:
                 best, best_score = candidate, score
@@ -64,10 +77,11 @@ def improve(
     bounds: Bounds,
     chosen: list[Candidate],
     passes: int = IMPROVE_PASSES,
+    weights: Weights | None = None,
 ) -> tuple[list[Candidate], int]:
     """Tukar satu pilihan pada satu lahan selama penukaran itu menaikkan skor."""
     evaluations = 0
-    current_score = _score(chosen, problem, objective, bounds)
+    current_score = _score(chosen, problem, objective, bounds, weights)
 
     for _ in range(passes):
         moved = False
@@ -77,7 +91,7 @@ def improve(
                     continue
                 trial = list(chosen)
                 trial[position] = alternative
-                trial_score = _score(trial, problem, objective, bounds)
+                trial_score = _score(trial, problem, objective, bounds, weights)
                 evaluations += 1
                 if trial_score > current_score + TOLERANCE:
                     chosen, current_score, moved = trial, trial_score, True
@@ -88,9 +102,9 @@ def improve(
 
 
 def solve(
-    problem: Problem, objective: str, bounds: Bounds
+    problem: Problem, objective: str, bounds: Bounds, weights: Weights | None = None
 ) -> tuple[list[str], int]:
     """Greedy lalu perbaikan lokal; kembalikan id terpilih dan jumlah evaluasi."""
-    chosen, first = greedy(problem, objective, bounds)
-    chosen, second = improve(problem, objective, bounds, chosen)
+    chosen, first = greedy(problem, objective, bounds, weights)
+    chosen, second = improve(problem, objective, bounds, chosen, weights=weights)
     return [c.id for c in chosen], first + second

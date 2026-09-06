@@ -49,7 +49,7 @@ ditangani `apiFetch`.
 
 | Metode | Jalur | Peran | Guna |
 | --- | --- | --- | --- |
-| `GET` | `/api/plans/propose?season=<label>` | **pengurus** | hitung tiga usulan rencana; tidak menyimpan apa pun |
+| `GET` | `/api/plans/propose?season=<label>&goal=<kalimat>` | **pengurus** | hitung tiga usulan rencana; tidak menyimpan apa pun |
 | `POST` | `/api/plans` | **pengurus** | simpan satu rencana yang dipilih |
 | `GET` | `/api/plans` | semua peran | daftar rencana tersimpan |
 | `GET` | `/api/plans/:id` | semua peran | satu rencana tersimpan beserta itemnya |
@@ -59,6 +59,10 @@ Perhatikan tiga hal yang mudah salah:
 
 - `propose` memakai **`GET`**, bukan `POST`, dan parameternya lewat **query
   string** `?season=`, bukan body.
+- `goal` **opsional**: kalimat tujuan pengurus dalam bahasa Indonesia, maksimal
+  500 aksara. Kosongkan kalau pengurus tidak menyatakan apa-apa — tujuan kosong
+  berarti bobot bawaan dan **nol panggilan model**, jadi jawabannya lebih cepat.
+  Lihat §3.4.
 - Pembatalan memakai **`POST /api/plans/:id/cancel`**, bukan
   `DELETE /api/plans/:id`.
 - `propose` dan `POST /api/plans` memerlukan peran **pengurus**. Peran lain
@@ -93,6 +97,10 @@ export type ProposalResponse = {
   engine: 'ai-service' | 'fallback'
   /** Berapa panen tercatat yang mengkalibrasi model hasil. 0 = murni model. */
   yield_observations: number
+  /** Satu kalimat batas yang WAJIB tampil di layar, apa adanya. */
+  limits: string
+  /** Pembanding musim lalu. null = belum ada musim pembanding, BUKAN nol ton. */
+  previous_season: PreviousSeasonResponse | null
   /** Selalu tiga, satu per objektif, urut aman lalu pendapatan lalu pasar. */
   plans: CandidatePlanResponse[]
   /** Lahan yang tidak bisa dimasukkan rencana. Wajib ditampilkan. */
@@ -109,12 +117,58 @@ export type SeasonResponse = {
   planting_to: string    // batas tanam paling akhir
 }
 
+export type PreviousSeasonResponse = {
+  label: string          // "MT I 2025/2026"
+  peak_tonnes: number
+  total_tonnes: number
+  blocks: number
+}
+
 export type CandidatePlanResponse = {
   objective: 'aman' | 'pendapatan' | 'pasar'
   /** Paragraf bahasa Indonesia. Bisa kosong; perlakukan sebagai opsional. */
   narrative: string
   metrics: PlanMetricsResponse
   assignments: PlanAssignmentResponse[]
+  /** Ambang tiap komoditas, ditandai atau tidak. Jawaban atas "dibanding apa?". */
+  thresholds: CommodityThresholdResponse[]
+  /** Minggu yang melewati ambang, satu baris per minggu. Kosong = tidak ada. */
+  flagged: PlanFlaggedWeekResponse[]
+  /** Kebutuhan pupuk rencana ini — dasar RDKK sebelum benih masuk tanah. */
+  fertiliser: FertiliserLineResponse[]
+  /** Komoditas yang belum punya tarif. Tampilkan "—", JANGAN tampilkan 0 kg. */
+  fertiliser_unrated: string[]
+  /** Anggota yang garapannya melewati batas subsidi 2 ha. Ditandai, tidak dipotong. */
+  over_subsidy_cap: OverSubsidyCapResponse[]
+}
+
+export type CommodityThresholdResponse = {
+  commodity_id: string
+  tonnes_per_week: number
+  /** Dari mana ambangnya: kapasitas tampung koperasi atau bawaan. */
+  basis: string
+}
+
+export type PlanFlaggedWeekResponse = {
+  iso_week: string        // "2027-W03"
+  commodity_id: string
+  tonnes: number
+  threshold_tonnes: number
+  basis: string
+}
+
+export type FertiliserLineResponse = {
+  input_item: string      // "Urea"
+  quantity_kg: number
+  /** Komoditas yang menyumbang angka ini. */
+  sources: string[]
+}
+
+export type OverSubsidyCapResponse = {
+  member_id: string
+  member_name: string
+  planted_ha: number
+  excess_ha: number
 }
 
 export type PlanMetricsResponse = {
@@ -229,6 +283,37 @@ daftar tidak memuat isinya. Untuk menampilkan detail, panggil
 `GET /api/plans/:id`. Jangan membangun layar daftar yang bergantung pada
 `items`.
 
+### 3.4 Tujuan pengurus (`goal`)
+
+`propose` menerima satu parameter opsional berisi kalimat tujuan pengurus:
+
+```
+/api/plans/propose?season=MT%20I%202026%2F2027&goal=musim%20depan%20jangan%20menumpuk
+```
+
+Yang perlu diketahui FE, dan tidak lebih dari ini:
+
+- **Maksimal 500 aksara** (aksara, bukan byte). Lebih dari itu ditolak
+  `422 plan_goal_too_long`. Batasi di kolom isian, jangan biarkan pengurus
+  menulis panjang lalu kehilangan rencananya.
+- **Kosong itu wajar dan lebih cepat.** Tanpa tujuan, backend memakai bobot
+  bawaan dan tidak memanggil model sama sekali. Jangan mengirim string kosong
+  sebagai "netral" — cukup jangan sertakan parameternya.
+- **Tujuan menggeser penekanan, bukan mengganti arti.** Rencana "Aman" tetap
+  rencana yang meratakan puncak panen; tujuan hanya menggeser seberapa kuat
+  penekanannya. Kalau kalimatnya meminta sesuatu yang membalik arti label,
+  permintaan itu diabaikan dan alasannya dicatat di sisi layanan.
+- **Tujuan tidak pernah menjadi angka.** Seluruh tonase, rupiah, dan tanggal
+  tetap dihitung solver deterministik. Tidak ada angka di layar yang berasal
+  dari model bahasa.
+- **Tujuan yang berbeda berarti perhitungan yang berbeda**, jadi ia ikut
+  menjadi kunci cache. Mengubah kalimatnya berarti menunggu penuh lagi.
+
+Bentuk isiannya bebas: daftar pilihan siap pakai ("jangan menumpuk di satu
+minggu", "utamakan permintaan pembeli", "kejar pendapatan tertinggi") lebih
+mudah dipakai pengurus daripada kotak teks kosong, dan keduanya dikirim lewat
+parameter yang sama.
+
 ---
 
 ## 4. Kode error
@@ -242,6 +327,7 @@ boleh dipetakan langsung ke kalimat Indonesia di UI.
 | 403 | `Forbidden` | peran bukan pengurus | sembunyikan tombolnya sejak awal |
 | 403 | `account is not linked to a cooperative` | akun belum punya koperasi | ajak melengkapi profil |
 | 400 | `season is required` | query `season` kosong | bug FE, jangan tampilkan mentah |
+| 422 | `plan_goal_too_long` | `goal` lebih dari 500 aksara | minta perpendek; jangan buang isian pengurus |
 | 422 | `plan_no_plots` | koperasi belum punya lahan | ajak menambah lahan |
 | 422 | `plan_no_climate_normals` | tidak ada normal iklim untuk sel lahan | jelaskan data cuaca belum siap |
 | 422 | `plan_season_closed` | jendela tanam musim itu sudah lewat | tawarkan musim berikutnya |
@@ -282,10 +368,15 @@ import type {
 export async function loadProposal(
   sessionId: string,
   season: string,
+  goal?: string,
 ): Promise<ProposalResponse> {
+  // Tujuan kosong sengaja tidak dikirim: tanpa parameter ini backend memakai
+  // bobot bawaan dan melewati panggilan model, jadi jawabannya lebih cepat.
+  const trimmed = goal?.trim()
+
   return apiFetch<ProposalResponse>('/api/plans/propose', {
     sessionId,
-    query: { season },
+    query: trimmed ? { season, goal: trimmed } : { season },
   })
 }
 
@@ -375,17 +466,26 @@ dari awal — mengirimnya tidak berguna dan tidak akan dipercaya.
 
 Alur `propose`:
 
-1. Pengurus memilih musim, lalu panggil `loadProposal`.
-2. Tampilkan **tiga kartu berdampingan**, satu per objektif. Ketiganya sah;
+1. Pengurus memilih musim dan, kalau mau, menyatakan tujuannya — dari daftar
+   pilihan siap pakai atau diketik bebas — lalu panggil `loadProposal`.
+   Tujuannya opsional; tanpa itu rencananya tetap terbit, hanya lebih kaku.
+2. Tampilkan `limits` apa adanya di dekat ketiga kartu, dan `previous_season`
+   sebagai pembanding. `previous_season: null` berarti belum ada musim
+   pembanding — tulis "—", **bukan 0 ton**.
+3. Tampilkan **tiga kartu berdampingan**, satu per objektif. Ketiganya sah;
    tidak ada yang "paling benar". Bedanya pertanyaan yang dijawab:
    - **aman** — "kalau cuaca membuat panen menumpuk, apa gudang masih muat?"
    - **pendapatan** — "mana yang paling bernilai?"
    - **pasar** — "mana yang memenuhi kontrak pembeli yang sudah ada?"
-3. Setiap kartu menampilkan `narrative`, lalu metrik, lalu tabel `assignments`.
-4. Tampilkan `skipped` di bawah ketiga kartu. **Jangan disembunyikan** — kalau
+4. Setiap kartu menampilkan `narrative`, lalu metrik, lalu `thresholds` dan
+   `flagged` (puncak dibandingkan terhadap apa, dan minggu mana yang lewat),
+   lalu `fertiliser` beserta `over_subsidy_cap`, lalu tabel `assignments`.
+   Komoditas di `fertiliser_unrated` ditulis "—", **bukan 0 kg**: "belum ada
+   angkanya" dan "butuh nol kilogram" dua hal yang berbeda.
+5. Tampilkan `skipped` di bawah ketiga kartu. **Jangan disembunyikan** — kalau
    lahan seorang anggota hilang tanpa penjelasan, pengurus akan menganggap
    sistemnya rusak.
-5. Pilih satu, panggil `applyPlan`, lalu arahkan ke `/plans/[plan_id]`.
+6. Pilih satu, panggil `applyPlan`, lalu arahkan ke `/plans/[plan_id]`.
 
 ---
 

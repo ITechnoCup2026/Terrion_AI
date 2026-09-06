@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from app.solver.metrics import Measures
 
 # Urutan bobot: (ratakan puncak, maksimalkan pendapatan, penuhi permintaan).
-WEIGHTS: dict[str, tuple[float, float, float]] = {
+#
+# Ini bawaan, bukan satu-satunya. Lapis tujuan (app/agent/intent.py) boleh
+# menggantinya dari kalimat pengurus, dan seluruh jalur solver menerimanya
+# sebagai argumen supaya penggantian itu tidak pernah menjadi keadaan global.
+Weights = dict[str, tuple[float, float, float]]
+
+WEIGHTS: Weights = {
     "aman": (0.70, 0.20, 0.10),
     "pendapatan": (0.15, 0.75, 0.10),
     "pasar": (0.20, 0.20, 0.60),
@@ -53,9 +59,11 @@ def criterion_value(measures: Measures, criterion: str) -> float:
     return float(measures.coverage_kg)
 
 
-def scalarise(measures: Measures, objective: str, bounds: Bounds) -> float:
+def scalarise(
+    measures: Measures, objective: str, bounds: Bounds, weights: Weights | None = None
+) -> float:
     """Gabungkan tiga besaran menjadi satu skor, makin besar makin baik."""
-    w_peak, w_income, w_market = WEIGHTS[objective]
+    w_peak, w_income, w_market = (weights or WEIGHTS)[objective]
     return (
         w_peak * (1.0 - normalise(measures.peak, bounds.peak_span(objective)))
         + w_income * normalise(measures.income, bounds.income)
