@@ -159,15 +159,33 @@ async def warm_client() -> None:
     url = settings.llm_base_url.rstrip("/") + "/models"
     headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
 
-    async def ping() -> None:
+    async def ping() -> int | None:
         # Jaringan dan URL yang salah bentuk; keduanya tidak boleh menghentikan
         # proses. CancelledError sengaja lewat: saat shutdown ia harus lolos.
         try:
-            await client.get(url, headers=headers, timeout=httpx.Timeout(5.0))
+            response = await client.get(url, headers=headers, timeout=httpx.Timeout(5.0))
         except (httpx.HTTPError, httpx.InvalidURL) as exc:
             logger.debug("pemanasan_gagal", error=repr(exc))
+            return None
+        return response.status_code
 
-    await asyncio.gather(*(ping() for _ in range(NARRATION_CONCURRENCY)))
+    statuses = await asyncio.gather(*(ping() for _ in range(NARRATION_CONCURRENCY)))
+
+    # Kunci yang ditolak penyedia terlihat di sini lebih dulu, ketika belum ada
+    # yang menunggu. Tanpa baris ini ia hanya muncul di tengah permintaan
+    # sungguhan sebagai empat 401 berturut-turut — tiga narasi dan satu lapis
+    # tujuan — dan tak satu pun menyebut kredensial sebagai penyebabnya; yang
+    # terbaca hanya "llm_gagal", yang sama bunyinya untuk model yang salah,
+    # jaringan yang putus, atau kuota yang habis. Sekali per proses, bukan
+    # sekali per koneksi: ketiga ping membawa kunci yang sama.
+    ditolak = next((s for s in statuses if s in (401, 403)), None)
+    if ditolak is not None:
+        logger.warning(
+            "kredensial_penyedia_ditolak",
+            status=ditolak,
+            provider=settings.llm_provider,
+            base_url=settings.llm_base_url,
+        )
 
 
 async def aclose_client() -> None:

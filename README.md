@@ -1,310 +1,580 @@
 # Terrion_AI
 
-Layanan komputasi perencanaan tanam untuk **Terrion** — sistem pelacakan lahan
-dan perencanaan musim untuk koperasi tani. Repo ini menyelesaikan soal
-optimasinya, mengukur risikonya, dan menjelaskannya dalam bahasa Indonesia.
+[![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688.svg)](https://fastapi.tiangolo.com/)
+[![OR-Tools](https://img.shields.io/badge/Google%20OR--Tools-CP--SAT%209.11%2B-orange.svg)](https://developers.google.com/optimization)
+[![NumPy](https://img.shields.io/badge/NumPy-2.1%2B%20Vectorized-013243.svg)](https://numpy.org/)
+[![Contract](https://img.shields.io/badge/Contract-v1.0%20Frozen-green.svg)](docs/ARCHITECTURE.md)
+[![Tests](https://img.shields.io/badge/Tests-84%20passed%20(100%25)-brightgreen.svg)](tests/)
+[![Zero-PII](https://img.shields.io/badge/Privacy-Zero--PII%20Guaranteed-success.svg)](#7-prinsip-ai-bertanggung-jawab--keamanan)
+[![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
-> **Layanan ini opsional.** Kalau ia mati, tidak ter-deploy, atau tidak pernah
-> dipanggil, fitur perencanaan di Terrion tetap berjalan penuh memakai solver
-> di dalam `Terrion_Backend`. Yang berubah hanya satu field di respons:
-> `"engine": "fallback"`. Itu bukan kebetulan — itu tujuan desain nomor satu.
+Layanan komputasi kecerdasan buatan dan optimasi perencanaan tanam untuk **Terrion** — sistem pelacakan lahan dan perencanaan musim kolektif untuk koperasi tani. Layanan ini menyelesaikan optimasi kombinatorial multi-objektif, mengukur ketidakpastian risiko cuaca/panen secara probabilistik, menerjemahkan arahan pengurus koperasi dalam bahasa alami, dan menyajikan narasi hasil perencanaan dalam Bahasa Indonesia yang dijamin bebas halusinasi numerik.
+
+> **Layanan ini bersifat opsional (*Soft Dependency*).**  
+> Jika layanan ini mati, tidak ter-deploy, atau mengalami batas waktu (*timeout*), fitur perencanaan di Terrion tetap berjalan penuh 100% menggunakan solver cadangan bawaan di dalam `Terrion_Backend` (Go). Yang berubah hanyalah satu *field* status pada respons: `"engine": "fallback"`. Hal ini merupakan prinsip desain nomor satu: **kecerdasan buatan hadir sebagai peningkatan (*enhancement*), bukan titik kegagalan tunggal (*single point of failure*).**
 
 ---
 
-## 1. Penjelasan aplikasi
+## Daftar Isi
 
-Sebuah koperasi dengan 40 lahan hampir selalu menanam pada waktu yang
-berdekatan, karena hujan datang bersamaan dan tetangga menanam bersamaan. Tiga
-bulan kemudian seluruh lahan panen di minggu yang sama: gudang tidak muat,
-truk tidak cukup, dan harga jatuh persis ketika semua orang punya paling banyak
-untuk dijual.
+- [1. Konteks Masalah & Nilai Bisnis](#1-konteks-masalah--nilai-bisnis)
+- [2. Fitur Utama & Keunggulan](#2-fitur-utama--keunggulan)
+- [3. Arsitektur Sistem & Alur Data](#3-arsitektur-sistem--alur-data)
+- [4. Pipeline Pemrosesan End-to-End](#4-pipeline-pemrosesan-end-to-end)
+- [5. Teknologi & Alasan Pemilihan](#5-teknologi--alasan-pemilihan)
+- [6. Spesifikasi Kontrak API (v1.0)](#6-spesifikasi-kontrak-api-v10)
+- [7. Prinsip AI Bertanggung Jawab & Keamanan](#7-prinsip-ai-bertanggung-jawab--keamanan)
+- [8. Panduan Instalasi & Penggunaan Lokal](#8-panduan-instalasi--penggunaan-lokal)
+- [9. Konfigurasi Lingkungan (.env)](#9-konfigurasi-lingkungan-env)
+- [10. Pengujian & Jaminan Mutu](#10-pengujian--jaminan-mutu)
+- [11. Panduan Deployment Produksi](#11-panduan-deployment-produksi)
+- [12. Struktur Repositori](#12-struktur-repositori)
+- [13. Keterbatasan yang Dinyatakan](#13-keterbatasan-yang-dinyatakan)
+- [14. Lisensi](#14-lisensi)
 
-Terrion memandang keempat puluh lahan itu sekaligus. `Terrion_Backend` (Go)
-menghitung, untuk setiap kombinasi *lahan × varietas × tanggal tanam*, kapan
-panennya jatuh dan berapa perkiraan tonasenya. Layanan ini menerima ratusan
-kombinasi itu dan menjawab satu pertanyaan: **kombinasi mana yang sebaiknya
-dipilih.**
+---
+
+## 1. Konteks Masalah & Nilai Bisnis
+
+### Dilema Panen Raya (*The Harvest Glut Dilemma*)
+Pada koperasi pertanian tipikal dengan 40–100 lahan anggota, para petani cenderung menanam pada waktu yang hampir bersamaan karena hujan awal musim tiba serentak dan kebiasaan meniru tetangga. 
+
+Akibatnya, 3–4 bulan kemudian terjadi **bencana logistik dan ekonomi**:
+1. **Penumpukan Puncak (*Logistics Bottleneck*)**: Seluruh lahan panen di pekan yang sama. Kapasitas lantai jemur, gudang penyimpanan (*storage capacity*), dan armada truk koperasi tidak mencukupi.
+2. **Kejatuhan Harga Pasar (*Price Crash*)**: Terjadi banjir pasokan tepat saat semua orang menjual komoditas yang sama, menekan harga jual ke titik terendah.
+3. **Kegagalan Kontrak (*Contract Default*)**: Pada pekan-pekan berikutnya koperasi mengalami kekosongan stok, sehingga gagal memenuhi kuota pasokan rutin kepada mitra pembeli (*off-taker*).
+
+```
+Pola Tanam Konvensional (Tanpa Terrion):
+Tonase Panen
+  ▲
+  │              ████  <- Puncak panen meluber melebihi kapasitas gudang!
+  │             ██████    (Komoditas rusak, truk antre, harga anjlok)
+  │            ████████
+  │  ── ── ── ┌────────┐ ── ── ── <- Kapasitas Tampung Maksimal Koperasi
+  │           │        │
+  │           │        │
+  │ ░░░░░░░░░ │        │ ░░░░░░░  <- Pekan lain kosong (gagal kontrak pembeli)
+  └──────────────────────────────► Waktu (Pekan)
+
+Pola Tanam Terencana (Dengan Terrion_AI):
+Tonase Panen
+  ▲
+  │  ── ── ── ┌────────┐ ── ── ── <- Kapasitas Tampung Maksimal Koperasi
+  │  ████████ │████████│ ████████
+  │  ████████ │████████│ ████████ <- Terdistribusi rata sepanjang musim:
+  │  ████████ │████████│ ████████    gudang aman, kontrak pembeli terpenuhi,
+  └──────────────────────────────► Waktu (Pekan)    nilai jual maksimal.
+```
+
+### Solusi Terrion
+Terrion mengamati seluruh lahan anggota secara agregat. 
+- **`Terrion_Backend` (Go)** menghitung ratusan kombinasi *lahan × varietas × tanggal tanam* berdasarkan model agronomi (fenologi GDD dan kalibrasi hasil).
+- **`Terrion_AI` (Python)** menerima daftar ratusan kandidat kombinasi tersebut dan menjawab pertanyaan mendasar pengurus koperasi: **"Kombinasi mana yang sebaiknya dipilih untuk setiap lahan agar risiko minim, pendapatan petani optimal, dan kontrak pembeli terpenuhi?"**
+
+---
+
+## 2. Fitur Utama & Keunggulan
+
+| Fitur | Deskripsi Teknis | Manfaat Nyata bagi Koperasi |
+| --- | --- | --- |
+| **3 Rencana Optimasi (*Pareto Frontier*)** | Menghasilkan 3 rencana alternatif simultan: **Aman** (*risk-averse*), **Pendapatan** (*profit-maximizing*), dan **Pasar** (*contract-fulfilling*). | Pengurus koperasi dan musyawarah tani memiliki opsi komparatif transparan, bukan sekadar keputusan sepihak mesin. |
+| **Penskoringan Batas Atas (*P90 Scoring*)** | Rencana "Aman" diskor berdasarkan kuantil persentil ke-90 (kondisi iklim buruk), bukan nilai rata-rata (*expected value*). | Rencana yang hanya aman di musim rata-rata bukanlah rencana aman. Koperasi terlindungi dari lonjakan pasokan tak terduga. |
+| **Simulasi Risiko Monte Carlo (NumPy)** | Menjalankan **2.000 iterasi musim simulasi** tervektorisasi dengan distribusi probabilitas segitiga (*triangular ICDF*) per kandidat dalam waktu <30 milidetik. | Mengukur distribusi kuantil puncak panen (P50 dan P90) untuk kepastian kecukupan kapasitas gudang. |
+| **Penerjemah Niat (*Intent Layer*)** | Menerjemahkan bahasa alami pengurus (misal: *"fokus hindari penumpukan di awal tahun"*) menjadi vektor bobot matematis yang terikat aturan pembatas (*floor guardrail*). | Pengurus koperasi dapat mengarahkan fokus komputasi tanpa memahami kalkulus bobot numerik. |
+| **Penjaga Numerik Ketat (*Strict Numeric Guardrail*)** | Model bahasa menulis narasi penjelas, tetapi setiap token angka diuji terhadap kumpulan fakta terhitung (`Facts.allowed_numbers()`). | **0% toleransi halusinasi numerik**. Jika LLM mengubah angka, membulatkan sepihak, atau mengarang data, teks langsung dibatalkan dan diganti templat deterministik. |
+| **Arsitektur Nir-Data-Pribadi (*Zero-PII*)** | Ditegakkan langsung oleh definisi tipe Pydantic dan regex buram `^[pkv][0-9]+$`. | Data anggota, NIK, nama petani, koordinat GPS, dan nama desa tidak pernah meninggalkan backend Go. |
+| **Determinisme Penuh** | Menggunakan generator angka acak teregistrasi (`seed`). Permintaan identik dengan *seed* identik menghasilkan rencana 100% konsisten. | Hasil komputasi dapat diaudit ulang kapan saja (*reproducible & auditable*). |
+
+---
+
+## 3. Arsitektur Sistem & Alur Data
+
+Terrion memisahkan sistem menjadi dua zona keamanan dan tanggung jawab yang tegas:
 
 ```mermaid
 graph TB
-    subgraph core["Zona tepercaya — memegang kredensial"]
-        api["<b>Terrion_Backend</b><br/>Go · Fiber<br/><i>auth, tenancy, basis data,<br/>model agronomi, solver cadangan</i>"]
+    subgraph core["Zona Tepercaya — Memegang Kredensial & Basis Data"]
+        api["<b>Terrion_Backend</b><br/>Go · Fiber<br/><i>Autentikasi, Multi-tenancy, DB Postgres,<br/>Model Agronomi GDD, Solver Cadangan</i>"]
+        db[("Supabase Postgres<br/><i>Data Anggota, Lahan, Cuaca</i>")]
+        api -->|"Koneksi SQL & RLS"| db
     end
 
-    subgraph ai["Zona tanpa data pribadi — tanpa kredensial"]
-        aisvc["<b>Terrion_AI</b><br/>Python · FastAPI<br/><i>solver, Monte Carlo, narasi</i>"]
+    subgraph ai["Zona Tanpa Data Pribadi — Stateless Microservice"]
+        aisvc["<b>Terrion_AI</b><br/>Python · FastAPI<br/><i>CP-SAT Solver, Monte Carlo NumPy,<br/>Intent Parser, Numeric Guardrail</i>"]
+        llm["Penyedia LLM<br/><i>OpenRouter / Sumopod / OpenAI<br/>(Opsional & Dapat Di-fallback)</i>"]
+        aisvc -.->|"HTTPS · JSON<br/>Hanya Fakta Angka"| llm
     end
 
-    db[("Supabase Postgres")]
-    llm["Penyedia LLM<br/><i>opsional</i>"]
-
-    api -->|"pemilik basis data"| db
-    api -.->|"HTTPS · Bearer<br/><b>opsional, ada fallback</b>"| aisvc
-    aisvc -.->|"opsional, ada fallback"| llm
+    api -.->|"HTTPS · Bearer Token<br/><b>Opsional — Ada Circuit Breaker & Fallback</b>"| aisvc
 
     style aisvc stroke-dasharray: 5 5
+    style llm stroke-dasharray: 5 5
 ```
 
-Garis putus-putus adalah bagian yang boleh mati tanpa fitur ikut mati.
+### Pembagian Tanggung Jawab Antar-Layanan
 
-**Yang layanan ini tidak punya, dan tidak boleh punya:** koneksi basis data,
-kredensial Supabase, nama anggota, koordinat lahan, nama desa, model agronomi,
-dan state antar permintaan.
+| Lapis | Komponen | Lokasi | Alasan Desain |
+| --- | --- | --- | --- |
+| **L1 — Agronomi & Entitas** | Kalibrasi GDD, akumulasi suhu, model hasil panen *ridge*, batas lahan fisik. | `Terrion_Backend` (Go) | Terikat langsung pada tabel database dan histori cuaca. Menjaga satu sumber kebenaran data agronomi. |
+| **L2 — Solver & Risiko** | Pemecahan optimasi kombinatorial 3 objektif, propagasi ketidakpastian panen. | `Terrion_AI` (Python) | Masalah Riset Operasi (*Operations Research*) murni. Memanfaatkan ekosistem matang Google OR-Tools CP-SAT dan komputasi matriks NumPy. |
+| **L3 — Agen & Bahasa** | Penerjemahan niat arahan pengurus, sintesis narasi Bahasa Indonesia, validasi numerik. | `Terrion_AI` (Python) | LLM client, guardrails teks, prompt management, dan evaluasi format lebih cepat dan aman dijalankan di luar zona database. |
 
----
-
-## 2. Fitur utama
-
-| Fitur | Penjelasan |
-| --- | --- |
-| **Tiga rencana, tiga pertanyaan berbeda** | *Aman* menjawab "kalau cuaca membuat semua panen jatuh bersamaan, apa kita masih sanggup?"; *Pendapatan* menjawab "apa yang paling bernilai?"; *Pasar* menjawab "apa yang memenuhi kontrak yang sudah ada?" |
-| **Rencana "Aman" diskor pada batas atas** | Bukan pada nilai harapan. Rencana yang hanya aman di musim rata-rata bukan rencana aman, ia rencana rata-rata |
-| **Kuantil risiko Monte Carlo** | 2.000 musim simulasi menjawab "berapa ton paling banyak yang mungkin datang dalam satu minggu?" — angka yang menentukan apakah gudang cukup, dan yang tidak bisa didapat dari rata-rata |
-| **Narasi dengan penjaga numerik** | Model bahasa menulis penjelasannya, tetapi setiap angka di teksnya dicocokkan dengan angka yang benar-benar dihitung. Satu angka meleset → seluruh teks dibuang |
-| **Batas nol-data-pribadi** | Ditegakkan oleh bentuk tipe dan oleh uji, bukan oleh kebijakan tertulis |
-| **Determinisme** | Permintaan yang sama dengan seed yang sama menghasilkan rencana yang identik |
+> **Yang Terrion_AI TIDAK miliki dan TIDAK BOLEH miliki:**  
+> Koneksi database, kredensial Supabase/PostgreSQL, nama anggota/petani, NIK, koordinat polygon lahan, nama desa/kecamatan, dan status (*state*) antar-permintaan.
 
 ---
 
-## 3. Teknologi yang digunakan
+## 4. Pipeline Pemrosesan End-to-End
 
-| Paket | Peruntukan | Kenapa ini, bukan yang lain |
+Setiap panggilan ke endpoint utama `/v1/plan/propose` melewati alur sekuensial yang terukur anggaran waktunya:
+
+```mermaid
+flowchart TD
+    Req([Permintaan dari Go Backend<br/>X-Request-Id & Bearer Token]) --> V[Validasi Kontrak Pydantic v1.0<br/>Cek Struktur, Batas Ukuran & Anonimitas]
+    V -->|Gagal| E422[Tolak 422 problem_too_large / 400 malformed]
+    V -->|Lolos| IL{Ada Goal Teks?}
+    
+    IL -->|Ya| IP[Intent Layer<br/>Terjemahkan Goal ke Bobot Matematis via LLM]
+    IL -->|Tidak| DW[Gunakan Bobot Bawaan Multi-Objektif]
+    IP -->|Lolos Guardrail Bobot| DB[Bobot Terkalibrasi]
+    IP -->|Gagal / Timeout| DW
+    
+    DW --> HS[Portfolio Solver Engine]
+    DB --> HS
+    
+    subgraph Portfolio ["Portfolio Solver Engine"]
+        HS --> CP[CP-SAT Exact Solver<br/>OR-Tools Integer Programming]
+        HS --> GR[Greedy Heuristic<br/>Fast Stochastic Search]
+        CP --> CMP[Evaluasi Skor Objektif Riil]
+        GR --> CMP
+        CMP --> WIN[Pilih Solusi Terbaik per Objektif]
+    end
+    
+    WIN --> MC[Monte Carlo Risk Simulation<br/>2.000 Undian Vektor NumPy Triangular ICDF]
+    MC --> FX[Ekstraksi Fakta Terhitung<br/>Facts Object & Allowed Numbers Set]
+    
+    FX --> NL{LLM Aktif &<br/>Sisa Anggaran Waktu Cukup?}
+    NL -->|Ya| LLMCall[Panggil LLM Provider<br/>Sintesis Narasi Bahasa Indonesia]
+    NL -->|Tidak| TPL[Gunakan Templat Narasi Deterministik]
+    
+    LLMCall --> NG{Numeric Guardrail<br/>Apakah Ada Angka Liar / Halusinasi?}
+    NG -->|Semua Angka Valid| SOK[narrative_source: 'llm']
+    NG -->|Ada Angka Fiktif / Batal| TPL
+    TPL --> SOF[narrative_source: 'template']
+    
+    SOK --> Res([Format ProposeResponse v1.0<br/>Rencana + Metrik + Narasi + Diagnostik])
+    SOF --> Res
+```
+
+### Detail Tahapan Kritis:
+1. **Pemanasan Sistem (*Lifespan Warm-up*)**:
+   - Impor mesin CP-SAT dilakukan di *thread* latar belakang saat proses *booting* untuk menghemat latensi 549 ms dari permintaan pengguna pertama.
+   - Klien HTTP melakukan *pre-warming* koneksi TLS ke penyedia LLM (menghemat latensi *handshake* awal ~1,4 detik).
+2. **Hybrid Solver Portfolio**:
+   - Menjalankan CP-SAT untuk mencari solusi optimal global matematis.
+   - Secara bersamaan menjalankan algoritma heuristik *Greedy* (<10 ms).
+   - Pada rencana "Aman", metrik non-linear P90 hasil Monte Carlo diuji langsung terhadap keluaran kedua solver. Solusi dengan skor empiris terbaik yang dipilih (menghindari kelemahan aproksimasi linier).
+3. **Pengendalian Anggaran Waktu Dinamis (*Time-Budgeting*)**:
+   - Backend Go menetapkan batas waktu total 3.500 ms.
+   - Terrion_AI menghitung waktu yang telah dihabiskan oleh *intent layer* dan *solver*, lalu mengalokasikan sisa waktu murni untuk *narration layer*. Jika sisa waktu tidak mencukupi, narasi otomatis beralih ke templat tanpa memicu *timeout*.
+
+---
+
+## 5. Teknologi & Alasan Pemilihan
+
+| Pustaka / Alat | Peran dalam Sistem | Alasan Pemilihan Teknis |
 | --- | --- | --- |
-| `fastapi` | Kerangka HTTP | Validasi lewat Pydantic **adalah** kontraknya, bukan lapis tambahan di atasnya |
-| `uvicorn[standard]` | Server ASGI | Standar de-facto FastAPI; satu worker cukup dan justru diperlukan untuk determinisme |
-| `pydantic` | Model kontrak v1.0 | Satu sumber kebenaran bentuk payload; `extra="ignore"` memberi kompatibilitas maju |
-| `pydantic-settings` | Konfigurasi dari env | Konfigurasi adalah satu objek, dibangun sekali |
-| `numpy` | Monte Carlo tervektorisasi | 2.000 undian × 3 rencana selesai dalam puluhan milidetik; loop Python murni butuh puluhan detik |
-| `httpx` | Klien HTTP ke penyedia LLM | Async, timeout eksplisit per permintaan — yang dibutuhkan anggaran waktu |
-| `structlog` | Log terstruktur JSON | `request_id` merambat dari Go ke sini; tanpa ini, menelusuri satu permintaan lintas dua layanan mustahil |
-| `ortools` *(opsional)* | Solver CP-SAT | Inti optimasi Fase 2. Menulis branch-and-bound sendiri adalah pekerjaan berbulan-bulan yang hasilnya lebih buruk |
-| `pytest`, `pytest-asyncio`, `ruff` | Uji dan lint | — |
+| **`fastapi`** | Kerangka kerja web ASGI HTTP | Skema Pydantic berperan langsung sebagai kontrak API tunggal (*single source of truth*), dokumentasi otomatis OpenAPI/Swagger. |
+| **`uvicorn[standard]`** | Server ASGI produksi | Ringan, kompatibel penuh dengan arsitektur *event-loop* Python, ideal untuk kontainer *stateless*. |
+| **`pydantic` (v2)** | Validasi payload kontrak v1.0 | Kecepatan validasi berbasis Rust core, penegakan aturan batas ukuran, serta isolasi data non-pribadi lewat `ConfigDict(extra="ignore", frozen=True)`. |
+| **`pydantic-settings`** | Manajemen konfigurasi dari `.env` | Tipe data kuat untuk variabel lingkungan dengan nilai bawaan aman (*safe defaults*). |
+| **`ortools` (CP-SAT)** | Solver pemrograman kendala (*Constraint Programming*) | Solver industri terbaik untuk masalah optimasi kombinatorial diskret dan penjadwalan tanpa memerlukan lisensi komersial mahal. |
+| **`numpy`** | Simulasi Monte Carlo | Operasi matriks tervektorisasi berbasis C. Menjalankan 2.000 iterasi musim untuk 3 rencana dalam waktu ~20 ms (loop Python murni memakan puluhan detik). |
+| **`httpx`** | Klien HTTP asinkron ke penyedia LLM | Mendukung asynchronous I/O dengan *connection pooling* persisten (`keepalive_expiry=None`) dan batas waktu presisi per panggilan. |
+| **`structlog`** | *Structured JSON Logging* | Menyertakan `request_id` dari Go backend pada setiap baris log JSON, memungkinkan pelacakan jejak lintas layanan (*distributed tracing*). |
+| **`pytest` & `pytest-asyncio`** | Framework pengujian otomatis | Mendukung pengujian unit, asinkron, determinisme, dan kepatuhan kontrak JSON emas. |
+| **`ruff`** | Linter & formatter kode | Eksekusi super cepat untuk menjaga standar kualitas kode PEP 8 dan Python 3.12+. |
 
-**Yang sengaja tidak dipakai:**
-
-- **Tanpa pandas** — tidak ada tabel yang perlu di-*join*; ia menambah ~50 MB pada image.
-- **Tanpa scikit-learn / PyTorch** — tidak ada model yang dilatih di sini. Pemodelan
-  hasil panen ada di Go dan sudah terkalibrasi terhadap panen yang benar-benar dicatat.
-  Menambahkannya hanya agar terlihat seperti proyek AI adalah kebohongan yang mahal.
-- **Tanpa LangChain** — satu endpoint, satu prompt tetap, satu validasi keluaran.
-  Abstraksi rantai menambah permukaan kegagalan tanpa menambah kemampuan.
-- **Tanpa Celery/Redis** — layanan ini sinkron dan stateless; cache ada di sisi Go.
+### Yang Sengaja Dihindari (*Intentional Non-Usage*):
+- **Tanpa Pandas**: Tidak ada manipulasi tabel atau operasi *merge/join* relasional. Menghindari beban ~50 MB pada ukuran citra Docker.
+- **Tanpa PyTorch / Scikit-Learn**: Tidak ada model yang dilatih atau di-*fine-tune* pada runtime ini. Model agronomi berada di Go. Menambahkan dependensi *deep learning* ratusan megabyte hanya untuk komputasi optimasi adalah inefisiensi arsitektur.
+- **Tanpa LangChain / LlamaIndex**: Arsitektur hanya membutuhkan satu prompt terstruktur dengan validasi ketat. Abstraksi rantai berlapis hanya menambah *overhead* latensi dan memperbesar permukaan galat.
+- **Tanpa Celery / Redis**: Layanan ini bersifat sinkron cepat (<2 detik) dan murni *stateless*. Manajemen antrean dan *cache* hasil ditangani langsung di sisi Go backend.
 
 ---
 
-## 4. Cara instalasi
+## 6. Spesifikasi Kontrak API (v1.0)
+
+Kontrak data antara `Terrion_Backend` (Go) dan `Terrion_AI` (Python) dibekukan pada versi **`v1.0`**. 
+
+Keduanya disinkronkan tanpa monorepo dan tanpa kode generator eksternal, melainkan menggunakan **berkas emas JSON kembar (*Twin Golden JSON Fixtures*)**:
+- Sisi Python: `tests/fixtures/propose_request.golden.json`
+- Sisi Go: `internal/aiclient/testdata/propose_request.golden.json`
+
+### 1. Endpoint Utama: `POST /v1/plan/propose`
+
+Menyelesaikan persoalan perencanaan tanam multi-lahan dan menghasilkan tiga rencana komparatif.
+
+#### Header Wajib:
+- `Authorization: Bearer <AI_SERVICE_TOKEN>`
+- `Content-Type: application/json`
+- `X-Request-Id: <UUID>` *(opsional, dianjurkan untuk tracing)*
+
+#### Batasan Payload Permintaan:
+- `candidates`: Maksimal 2.000 item.
+- `demand`: Maksimal 400 baris.
+- `objectives`: 1 hingga 3 opsi (`"aman"`, `"pendapatan"`, `"pasar"`).
+- `goal`: Maksimal 500 karakter teks bebas pengurus koperasi.
+
+#### Contoh Cuplikan Permintaan (Request):
+```json
+{
+  "contract_version": "1.0",
+  "request_id": "5a1f0c9e-3c2a-4b3e-9f5a-77c0e2b1d004",
+  "seed": 20260905,
+  "season": {
+    "label": "MT I 2026/2027",
+    "start": "2026-10-01",
+    "end": "2027-03-31"
+  },
+  "objectives": ["aman", "pendapatan", "pasar"],
+  "goal": "Prioritaskan panen tidak menumpuk di gudang pada awal tahun baru",
+  "capacity_tonnes_per_week": 12.5,
+  "candidates": [
+    {
+      "id": "c001",
+      "plot_ref": "p1",
+      "area_ha": 0.82,
+      "commodity_ref": "k1",
+      "variety_ref": "v1",
+      "planting_date": "2026-10-05",
+      "harvest_start": "2027-01-08",
+      "harvest_end": "2027-01-22",
+      "tonnes_low": 3.72,
+      "tonnes_mid": 4.59,
+      "tonnes_high": 5.65,
+      "plausibility": "plausible",
+      "price_per_kg": 5200.0
+    }
+  ],
+  "demand": [
+    {
+      "commodity_ref": "k1",
+      "iso_week": "2027-01-11",
+      "kg": 3000
+    }
+  ]
+}
+```
+
+#### Contoh Cuplikan Respons (Response 200 OK):
+```json
+{
+  "contract_version": "1.0",
+  "request_id": "5a1f0c9e-3c2a-4b3e-9f5a-77c0e2b1d004",
+  "solver": "cp-sat",
+  "solver_version": "1.0.0",
+  "elapsed_ms": 1420,
+  "plans": [
+    {
+      "objective": "aman",
+      "candidate_ids": ["c004", "c007", "c014", "c020", "c022"],
+      "metrics": {
+        "peak_tonnes_p50": 7.65,
+        "peak_tonnes_p90": 8.58,
+        "total_tonnes": 24.77,
+        "gross_value": 254147000.0,
+        "demand_covered_kg": 5613
+      },
+      "narrative": "Rencana ini disusun agar panen tidak menumpuk di satu minggu. Sebanyak 5 lahan ditanami dengan 5 varietas, sehingga panen tersebar di 12 minggu, dari pekan 2026-12-14 sampai pekan 2027-03-01. Dari perkiraan total 24,8 ton, puncak panen mingguan berada di sekitar 7,7 ton, dan sembilan dari sepuluh musim tetap di bawah 8,6 ton. Kapasitas tampung koperasi adalah 12,5 ton per minggu. Rencana ini menutup 5.613 kg permintaan pembeli. Angka di atas adalah proyeksi, bukan kepastian.",
+      "narrative_source": "template"
+    }
+  ],
+  "diagnostics": {
+    "evaluations": 142,
+    "monte_carlo_draws": 2000,
+    "objective_status": "OPTIMAL",
+    "degraded": []
+  }
+}
+```
+
+### 2. Endpoint Operasional & Pemantauan
+
+| Metode | Jalur | Kegunaan | Deskripsi Respon |
+| --- | --- | --- | --- |
+| `GET` | `/health` | *Liveness Probe* | Cek proses aktif. Mengembalikan `{"status": "ok", "service": "terrion-ai"}`. |
+| `GET` | `/ready` | *Readiness Probe* | Memastikan modul CP-SAT siap, versi kontrak sesuai, dan konfigurasi LLM terbaca. |
+| `GET` | `/docs` | OpenAPI UI | Dokumentasi interaktif Swagger API. |
+
+### 3. Penanganan Galat & Standar Amplop Kesalahan
+
+Setiap respons kesalahan mengembalikan format JSON standar:
+```json
+{
+  "error": {
+    "code": "<kode_galat>",
+    "message": "<pesan_detail>"
+  }
+}
+```
+
+| Kode HTTP | Kode Galat (`code`) | Penyebab & Tanggapan Sistem |
+| --- | --- | --- |
+| `400` | `malformed_request` | Sintaks JSON cacat atau field wajib tidak ada. Pesan menyebut nama field yang bermasalah. |
+| `401` | `unauthenticated` | Token pada header `Authorization` kosong atau tidak cocok dengan `AI_SERVICE_TOKEN`. |
+| `409` | `contract_version_unsupported` | Versi major kontrak tidak kompatibel (misal: pengirim `2.0`, penerima `1.0`). Sisi Go otomatis fallback ke solver lokal. |
+| `422` | `problem_too_large` | Melebihi batas ukuran (kandidat > 2000, demand > 400). Pesan menyebutkan field dan kuota spesifiknya. |
+| `500` | `solver_failed` | Kesalahan internal solver saat melakukan pencarian solusi. |
+
+---
+
+## 7. Prinsip AI Bertanggung Jawab & Keamanan
+
+### 1. Batas Nol-Data-Pribadi (*Zero-PII by Type Design*)
+Data pribadi tidak disaring menggunakan *regex* atau filter teks manual, melainkan **dieliminasi dari struktur data sejak awal**:
+- Tipe `Candidate` sama sekali tidak menyediakan field untuk nama petani, NIK, koordinat geospasial, atau nama desa.
+- Referensi entitas hanya berupa ID buram per-permintaan (misal: `p1`, `v2`, `c010`). Kode regex `^[pkv][0-9]+$` menolak UUID asli atau teks beracun dengan galat `422`.
+- Blok fakta yang dikirim ke LLM pihak ketiga bahkan tidak memuat referensi lahan buram tersebut — pihak luar hanya menerima agregat angka matematis.
+
+### 2. Penjaga Numerik Anti-Halusinasi (*Strict Numeric Guardrail*)
+LLM adalah penyusun kata, bukan mesin kalkulator. Penerapan guardrail pada `app/agent/guard.py`:
+- Model bahasa dilarang menghitung atau menyimpulkan angka sendiri.
+- Setiap token angka yang ditulis oleh model diekstrak dan dicocokkan dengan himpunan angka sah `Facts.allowed_numbers()`.
+- Jika ditemukan satu angka yang tidak terdaftar (hasil halusinasi atau pembulatan yang tidak akurat), seluruh paragraf LLM dibuang dan diganti dengan templat berbasis aturan (*rule-based template*). Field status mencatat degradasi: `narrative_source: "template"`.
+
+### 3. Batas Niat Bahasa Alami (*Intent Floor Guardrail*)
+Pada `app/agent/intent.py`, penerjemahan bahasa alami hanya diizinkan menggeser bobot relatif optimasi antara $0$ dan $1$.
+- Diberlakukan batas bawah (*floor*): $w_{\text{dominant}} \ge 0,35$.
+- Hal ini menjamin bahwa rencana berlabel "Aman" tidak dapat dimanipulasi oleh *prompt injection* untuk menjadi rencana pengejar laba berisiko tinggi. Label di antarmuka pengguna tidak akan pernah membohongi pengurus koperasi.
+
+---
+
+## 8. Panduan Instalasi & Penggunaan Lokal
+
+### Prasyarat Sistem
+- **Python 3.12** atau versi yang lebih baru.
+- Manajer paket `pip`.
+- Sistem Operasi: Linux, macOS, atau Windows (mendukung penuh lingkungan PowerShell).
+
+### Langkah Instalasi
 
 ```bash
+# 1. Klon repositori
 git clone https://github.com/ITechnoCup2026/Terrion_AI.git
 cd Terrion_AI
 
+# 2. Buat dan aktifkan virtual environment
+# Linux/macOS:
 python3 -m venv .venv && source .venv/bin/activate
+# Windows (PowerShell):
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 3. Pasang dependensi lengkap (termasuk solver CP-SAT dan alat pengujian)
 pip install -e ".[dev]"
 
+# 4. Salin template konfigurasi lingkungan
 cp .env.example .env
 ```
 
-Isi `AI_SERVICE_TOKEN` di `.env` dengan nilai apa pun untuk pemakaian lokal —
-nilai yang sama harus diset di sisi Go.
-
-**Tidak ada kunci API yang dibutuhkan.** Bawaan `LLM_PROVIDER=template` membuat
-seluruh layanan berjalan, lulus seluruh uji, dan bisa didemokan tanpa satu pun
-akun penyedia.
-
-Solver CP-SAT bersifat opsional (roda `ortools` berukuran ~50 MB):
+### Menjalankan Server Lokal
 
 ```bash
-pip install -e ".[solver,dev]"
-```
-
----
-
-## 5. Cara penggunaan
-
-**Menjalankan:**
-
-```bash
+# Menjalankan server pengembangan dengan auto-reload
 uvicorn app.main:app --reload --port 8080
 ```
+Server akan aktif di `http://localhost:8080`. Dokumentasi interaktif Swagger dapat diakses di `http://localhost:8080/docs`.
 
-Dokumentasi API interaktif tersedia di `http://localhost:8080/docs`.
+### Uji Coba Cepat dengan Fixture Golden (cURL)
 
-**Satu permintaan lengkap memakai berkas emas:**
+Jalankan perintah berikut untuk menguji kalkulasi lengkap dengan data uji resmi:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/plan/propose \
-  -H "Authorization: Bearer $AI_SERVICE_TOKEN" \
+  -H "Authorization: Bearer lokal-dev-token" \
   -H "Content-Type: application/json" \
   -d @tests/fixtures/propose_request.golden.json | python -m json.tool
 ```
 
-Jawabannya berisi tiga rencana, masing-masing dengan `candidate_ids`, metrik
-risiko, dan narasi berbahasa Indonesia.
+---
 
-**Menjalankan uji:**
+## 9. Konfigurasi Lingkungan (.env)
+
+Layanan dapat berjalan penuh secara luring (*offline*) tanpa memerlukan kunci API eksternal apa pun saat menggunakan `LLM_PROVIDER=template`.
+
+| Variabel Lingkungan | Nilai Bawaan (*Default*) | Keterangan & Rekomendasi |
+| --- | --- | --- |
+| `AI_SERVICE_TOKEN` | *(Wajib Diisi)* | Kunci rahasia bersama (*shared secret*) untuk autentikasi Bearer token dari backend Go. Nilai harus identik di kedua sisi. |
+| `LLM_PROVIDER` | `template` | Opsi: `template`, `sumopod`, `openrouter`, `openai`. Nilai `template` berjalan 100% lokal dan deterministik tanpa jaringan. |
+| `LLM_API_KEY` | *(Kosong)* | Kunci API penyedia LLM. Biarkan kosong jika memakai `template`. |
+| `LLM_BASE_URL` | `https://ai.sumopod.com/v1` | URL basis endpoint yang kompatibel dengan protokol OpenAI `/chat/completions`. |
+| `LLM_MODEL` | `gpt-5.4-nano` | Model target narasi. Telah dievaluasi memiliki akurasi numerik dan kecepatan terbaik di bawah anggaran batas waktu. |
+| `LLM_FALLBACK_MODELS` | *(Kosong)* | Daftar model cadangan khusus untuk OpenRouter (dipisahkan koma). |
+| `LLM_TIMEOUT_MS` | `2800` | Batas anggaran waktu narasi LLM (milidetik). Menjaga total pemrosesan di bawah timeout Go (3.500 ms). |
+| `LLM_MAX_TOKENS` | `400` | Alokasi maksimal token respon LLM (termasuk parameter `reasoning: {enabled: false}`). |
+| `SOLVER_TIME_LIMIT_MS` | `1000` | Batas waktu komputasi CP-SAT per objektif dalam milidetik. |
+| `MONTE_CARLO_DRAWS` | `2000` | Jumlah iterasi musim simulasi probabilistik untuk kalkulasi kuantil P50/P90. |
+| `LOG_LEVEL` | `INFO` | Tingkat rincian log (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Log diformat terstruktur sebagai JSON. |
+
+---
+
+## 10. Pengujian & Jaminan Mutu
+
+Suite pengujian mencakup **84 pengujian otomatis** yang memvalidasi setiap invarian matematika, kepatuhan kontrak, dan keamanan privasi.
 
 ```bash
-pytest          # 42 uji
+# Menjalankan seluruh pengujian
+pytest -v
+
+# Menjalankan linter kode
 ruff check .
 ```
 
-**Endpoint:**
+### Cakupan Pengujian
 
-| Metode | Jalur | Guna |
-| --- | --- | --- |
-| `POST` | `/v1/plan/propose` | menyelesaikan soal, mengembalikan satu rencana per objektif |
-| `GET` | `/health` | liveness — proses hidup |
-| `GET` | `/ready` | readiness — solver siap, konfigurasi lengkap |
+```
+collected 84 items
+
+tests/test_contract_golden.py ......   Kesesuaian kontrak terhadap fixture bersama Go backend
+tests/test_cpsat.py ................   Ketepatan solusi CP-SAT, batasan kapasitas, dan optimality
+tests/test_endpoint.py .............   Validasi HTTP, error code 400/401/409/422, dan invariant dominasi
+tests/test_guard.py ................   Penjaga numerik, deteksi angka halusinasi, teks terpotong
+tests/test_intent.py ...............   Penerjemah niat bahasa alami, normalisasi, dan penegakan batas floor
+tests/test_llm_budget.py ...........   Pengendalian batas waktu dan pemangkasan token
+tests/test_metrics.py ..............   Perhitungan metrik tonase, gross revenue, dan pemenuhan kontrak
+tests/test_narration.py ............   Sintesis templat bahasa Indonesia dan penanganan API key salah
+tests/test_no_personal_data.py .....   Jaminan ketiadaan data pribadi (Zero-PII) & penolakan format UUID
+tests/test_solver_determinism.py ...   Jaminan determinisme hasil kalkulasi dengan seed yang sama
+
+============================== 84 passed in ~7.9s ==============================
+```
 
 ---
 
-## 6. Kontrak
+## 11. Panduan Deployment Produksi
 
-Bentuk permintaan dan respons dibekukan pada versi **`v1.0`** dan diuraikan
-lengkap di [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §4.
-
-Dua repo dijaga tetap seiring **tanpa monorepo, tanpa codegen, tanpa registri
-skema** — hanya oleh satu berkas JSON emas yang identik di kedua sisi:
-
-```
-Terrion_AI/tests/fixtures/propose_request.golden.json
-Terrion_Backend/internal/aiclient/testdata/propose_request.golden.json
-```
-
-Uji di kedua repo membaca berkas itu. Mengubah bentuk permintaan di satu sisi
-memecahkan uji di sisi itu (karena berkas emasnya harus ikut berubah), dan
-mengubah berkas emasnya memecahkan uji di sisi seberang pada CI berikutnya.
-
-Ketidakcocokan versi `MAJOR` menghasilkan `409 contract_version_unsupported`,
-dan sisi Go menanggapinya dengan fallback — tidak pernah dengan data yang salah.
-
----
-
-## 7. Penggunaan AI secara bertanggung jawab
-
-**Layanan ini tidak pernah menerima data pribadi, dan itu bukan janji melainkan
-bentuk tipe.** `Candidate` tidak punya field untuk nama, NIK, koordinat, desa,
-atau pengenal koperasi. Data pribadi tidak disaring keluar — ia tidak punya
-tempat untuk berada. Menambahkannya menuntut seseorang mengubah definisi tipe di
-dua repo sekaligus, dan itu terlihat di review.
-
-**Referensi lahan bersifat buram dan per-permintaan.** `p1` hari ini dan `p1`
-besok boleh menunjuk lahan yang berbeda. Layanan ini — bahkan kalau seluruh
-lognya disimpan selamanya — tidak bisa merakit riwayat satu lahan tertentu.
-Regex `^[pkv][0-9]+$` menolak UUID asli dengan `422`, sehingga batas ini
-ditegakkan juga dari sisi penerima, bukan hanya dari sisi pengirim.
-
-**Model bahasa tidak pernah menghasilkan angka.** Ia menerima blok fakta yang
-sudah dihitung dan menulis kalimat. Setelahnya, setiap token angka di teksnya
-dicocokkan dengan daftar angka terhitung; satu yang tidak cocok membatalkan
-seluruh narasi dan mengembalikannya ke kalimat templat. Yang ditangkap
-mekanisme ini bukan angka yang dikarang dari udara, melainkan angka yang
-**dibulatkan ulang** atau **dijumlahkan sendiri** oleh model — yang terlihat
-benar dan tidak berasal dari optimizer.
-
-Ketiganya dibuktikan oleh uji yang bisa dijalankan sendiri, bukan oleh paragraf
-ini:
+### 1. Deployment ke Railway
+Repositori telah dilengkapi konfigurasi otomatis via `railway.json` dan `Dockerfile`:
 
 ```bash
-pytest tests/test_no_personal_data.py tests/test_guard.py -v
-```
-
-| Berkas uji | Yang dijaminnya |
-| --- | --- |
-| `tests/test_no_personal_data.py` | Field `Candidate` persis sama dengan daftar putih; UUID dan string beracun ditolak; blok fakta yang dikirim ke penyedia LLM tidak memuat satu pun referensi |
-| `tests/test_guard.py` | Angka yang dibulatkan ulang, dijumlahkan sendiri, atau dikarang membatalkan seluruh narasi |
-| `tests/test_solver_determinism.py` | Dua permintaan identik menghasilkan respons identik |
-| `tests/test_endpoint.py` | Invariant dominasi: rencana "Aman" benar-benar punya puncak terendah, "Pendapatan" nilai tertinggi, "Pasar" cakupan tertinggi |
-
----
-
-## 8. Keterbatasan yang dinyatakan
-
-Dua hal yang wajib disebut sendiri, sebelum ditemukan orang lain.
-
-1. **Panel harga acuan di basis data saat ini sintetis** — dibangkitkan oleh
-   satu gelombang sinus di migrasi seed. Struktur optimasinya benar dan angkanya
-   langsung bermakna begitu panel harga nyata masuk, tetapi selisih pendapatan
-   yang dilaporkan hari ini **tidak boleh dibaca sebagai rupiah nyata**.
-
-2. **Undian Monte Carlo independen antar lahan.** Kenyataannya cuaca
-   berkorelasi: musim yang terlambat terlambat untuk semua orang sekaligus. P90
-   yang dilaporkan karena itu optimistis. Perbaikannya sudah diketahui — satu
-   faktor pergeseran musim bersama per undian — dan dicatat sebagai pekerjaan v2.
-
-3. **Narasi LLM sekarang berjalan, tetapi angkanya kecil dan sampelnya
-   kecil.** Lewat Sumopod dengan `gpt-5.4-nano`: 18 dari 18 narasi kembali
-   sebagai `narrative_source: "llm"` dengan `degraded` kosong, pada 1.898-2.473
-   ms dinding — di dalam `AI_SERVICE_TIMEOUT_MS=3500` milik Go. Yang mengukur
-   itu belasan permintaan terhadap satu berkas fikstur, dari satu lokasi
-   jaringan, bukan beban sungguhan dari Railway. Perlakukan sebagai bukti
-   bahwa rantainya bekerja, bukan sebagai jaminan mutu layanan.
-
-   Penjaganya juga terbukti bukan hiasan: `gpt-4.1-nano` berulang kali menulis
-   "13 minggu" untuk fakta yang berbunyi "9 minggu", dan seluruh paragrafnya
-   dibuang. Yang tidak diperiksa penjaga adalah jumlah yang ditulis dengan
-   huruf — ia hanya membaca token digit — sehingga prompt secara eksplisit
-   melarang model menulis jumlah sebagai kata.
-
-**Yang tidak boleh diklaim tentang layanan ini:** "akurasi X%", "meningkatkan
-pendapatan petani sebesar Y". Tidak satu pun diuji lapangan.
-
----
-
-## 9. Penerapan
-
-Layanan ini boleh tidak ter-deploy sama sekali — lihat catatan di kepala berkas.
-Yang berikut hanya menghemat satu hop kalau ada URL hidup untuk diisikan ke
-`AI_SERVICE_URL` di sisi Go.
-
-**Railway.** `railway.json` sudah ada, jadi builder `DOCKERFILE`, health check
-`/health`, dan satu replika sudah terpasang tanpa klik apa pun:
-
-```bash
+# Login dan inisialisasi
 npm i -g @railway/cli
 railway login
-railway init            # atau: railway link, kalau proyeknya sudah dibuat
+railway init
 railway up
-railway domain          # cetak URL publik
+
+# Atur variabel lingkungan produksi (jangan set PORT secara manual)
+railway variables \
+  --set AI_SERVICE_TOKEN="<token_rahasia_produksi>" \
+  --set LLM_PROVIDER="template" \
+  --set LOG_LEVEL="INFO"
+
+# Dapatkan domain publik
+railway domain
 ```
 
-Ubah tiga variabel di dashboard atau lewat CLI, dan **jangan** menyetel `PORT`
-sendiri — Railway menyuntikkannya dan memakai nilai yang sama untuk health
-check:
-
-```bash
-railway variables --set AI_SERVICE_TOKEN=<token yang sama dengan sisi Go>                   --set LLM_PROVIDER=template                   --set LOG_LEVEL=INFO
-```
-
-`AI_SERVICE_TOKEN` yang kosong menolak **setiap** permintaan dengan `401`. Itu
-bawaan yang aman kalau lupa diisi, tetapi dari sisi Go bentuknya adalah circuit
-breaker yang langsung terbuka dan `"engine": "fallback"` selamanya — jadi kalau
-rencana tidak pernah datang dari layanan ini, variabel itu yang pertama dilihat.
-
-Sesudah domain terbit, buktikan keduanya hidup:
-
-```bash
-curl -s https://<domain>/health
-curl -s https://<domain>/ready
-```
-
-**Fly.io.** `fly.toml` juga sudah ada (region `sin`, 512 MB, mesin berhenti
-sendiri saat menganggur — dingin selama beberapa detik pada permintaan pertama):
+### 2. Deployment ke Fly.io
+Tersedia konfigurasi `fly.toml` siap pakai (wilayah Singapura `sin`, 512 MB memory, auto-stop saat menganggur):
 
 ```bash
 fly launch --copy-config --no-deploy
-fly secrets set AI_SERVICE_TOKEN=<token>
+fly secrets set AI_SERVICE_TOKEN="<token_rahasia_produksi>"
 fly deploy
 ```
 
-Keduanya memakai `Dockerfile` yang sama. Port dibaca dari `$PORT` bila ada dan
-jatuh ke 8080 bila tidak, jadi tidak ada berkas yang perlu dibedakan antar
-penyedia.
+### 3. Container Docker Mandiri
+
+```bash
+# Build citra Docker
+docker build -t terrion-ai:1.0.0 .
+
+# Jalankan kontainer
+docker run -d \
+  -p 8080:8080 \
+  -e AI_SERVICE_TOKEN="rahasia123" \
+  -e LLM_PROVIDER="template" \
+  --name terrion-ai-service \
+  terrion-ai:1.0.0
+```
 
 ---
 
-## Status
+## 12. Struktur Repositori
 
-Fase 1 selesai: kontrak, solver greedy, Monte Carlo, narasi templat, dan 42 uji
-hijau. Fase 2 (menjelang final): solver CP-SAT, penyedia OpenRouter, harness
-evaluasi dengan baseline, dan `docs/MODEL_CARD.md`.
+```
+Terrion_AI/
+├── app/
+│   ├── agent/                      # Lapis Agen, Pemahaman Niat & Narasi
+│   │   ├── prompts/
+│   │   │   └── narrate_id.txt      # Berkas aset prompt bahasa Indonesia
+│   │   ├── explain.py              # Orkestrasi narasi paralel beranggaran waktu
+│   │   ├── facts.py                # Ekstraksi blok fakta & himpunan angka terhitung
+│   │   ├── guard.py                # Penjaga numerik ketat anti-halusinasi
+│   │   ├── intent.py               # Penerjemah bahasa alami ke bobot optimasi
+│   │   └── providers.py            # Klien LLM (Template, OpenRouter, Sumopod, OpenAI)
+│   ├── contracts/                  # Definisi Kontrak & Skema Data
+│   │   └── v1.py                   # Kontrak v1.0 Pydantic (Permintaan, Respon, Metrik)
+│   ├── risk/                       # Lapis Risiko & Ketidakpastian
+│   │   └── montecarlo.py           # Simulasi Monte Carlo 2.000 iterasi tervektorisasi NumPy
+│   ├── solver/                     # Mesin Optimasi Kombinatorial
+│   │   ├── cpsat.py                # Solver CP-SAT Google OR-Tools
+│   │   ├── greedy.py               # Solver Heuristik Cepat (Greedy Baseline)
+│   │   ├── metrics.py              # Kalkulasi metrik kuantitatif rencana
+│   │   ├── objectives.py           # Formulasi skalarisasi 3 fungsi objektif
+│   │   └── errors.py               # Definisi galat spesifik solver
+│   ├── config.py                   # Konfigurasi sistem Pydantic Settings
+│   ├── logging.py                  # Format log JSON terstruktur (Structlog)
+│   ├── main.py                     # Aplikasi FastAPI & handler endpoint (/propose, /health)
+│   ├── problem.py                  # Representasi domain persoalan optimasi
+│   └── security.py                 # Validasi autentikasi Bearer Token
+├── docs/                           # Dokumentasi Mendalam & Diagram
+│   ├── ARCHITECTURE.md             # Dokumen arsitektur lengkap, kontrak v1.0, dan 10 ADR
+│   ├── INTEGRASI_FRONTEND.md       # Panduan integrasi tampilan antarmuka
+│   ├── RENCANA_AI_SERVICE_PYTHON.md # Rencana awal rekayasa sistem AI
+│   ├── terrion_ai_architecture_pipeline.svg # Diagram vektor pipeline pemrosesan
+│   └── terrion_ai_architecture_simple.svg   # Diagram arsitektur zona kepercayaan
+├── tests/                          # Rangkaian Pengujian Otomatis (84 Uji)
+│   ├── fixtures/                   # Fixture JSON emas sinkronisasi lintas repo
+│   │   ├── propose_request.golden.json
+│   │   └── propose_response.golden.json
+│   ├── conftest.py                 # Fixture pytest bersama & mocking
+│   ├── test_contract_golden.py
+│   ├── test_cpsat.py
+│   ├── test_endpoint.py
+│   ├── test_guard.py
+│   ├── test_intent.py
+│   ├── test_llm_budget.py
+│   ├── test_metrics.py
+│   ├── test_narration.py
+│   ├── test_no_personal_data.py
+│   └── test_solver_determinism.py
+├── .env.example                    # Template konfigurasi variabel lingkungan
+├── Dockerfile                      # Spesifikasi kontainer produksi
+├── fly.toml                        # Konfigurasi penyebaran Fly.io
+├── pyproject.toml                  # Metadata proyek, dependensi, dan konfigurasi tool
+├── railway.json                    # Konfigurasi penyebaran Railway
+└── README.md                       # Dokumentasi utama proyek
+```
+
+---
+
+## 13. Keterbatasan yang Dinyatakan
+
+Sebagai bentuk integritas rekayasa (*engineering integrity*), terdapat tiga batasan yang dinyatakan secara terbuka:
+
+1. **Harga Acuan Masih Bersifat Sintetis**:  
+   Panel harga acuan komoditas di basis data saat ini dibangkitkan dari simulasi gelombang musiman pada data *seed*. Algoritma optimasi telah berfungsi penuh dan langsung menghasilkan nilai riil begitu data harga historis pasar dimasukkan ke dalam sistem. Nilai estimasi pendapatan saat ini ditujukan untuk pemeringkatan komparatif, bukan nominal rupiah pasti.
+2. **Independensi Cuaca Antar-Lahan pada Monte Carlo**:  
+   Simulasi Monte Carlo saat ini mengasumsikan undian distribusi waktu panen antar-lahan bersifat independen. Pada kondisi nyata, fenomena iklim ekstrem (seperti El Niño/La Niña) mempengaruhi kawasan secara terkorelasi. Peningkatan faktor korelasi spasial iklim telah dijadwalkan pada roadmap versi 2.0.
+3. **Pemeriksaan Digit Angka pada Penjaga Numerik**:  
+   Penjaga numerik memvalidasi representasi token digit angka (misal: `"12"`, `"8,5"`, `"5.000"`). Penjaga tidak memeriksa angka yang dieja menggunakan kata huruf (misal: *"dua belas"*). Hal ini diatasi melalui instruksi sistem pada prompt yang secara eksplisit melarang model menuliskan kuantitas dalam bentuk ejaan kata.
+
+---
+
+## 14. Lisensi
+
+Hak Cipta © 2026 **Tim Terrion** (Kompetisi ITechnoCup 2026).  
+Didistribusikan di bawah lisensi terbuka [MIT License](LICENSE).

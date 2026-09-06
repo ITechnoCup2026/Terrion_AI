@@ -369,7 +369,11 @@ Aturan yang mengikat kedua sisi:
   rencana itu wajib `null`, bukan sebagian.
 - `plausibility` ∈ `{"plausible", "early", "late"}`.
 - `seed` wajib. Python wajib deterministik terhadapnya (§ADR-0007).
-- Batas ukuran: ≤ 2000 kandidat, ≤ 400 baris `demand`. Lebih dari itu → `422`.
+- Batas ukuran: ≤ 2000 kandidat, ≤ 400 baris `demand`, ≤ 3 `objectives`.
+  Lebih dari itu → `422`. `message` menyebut field dan kedua angkanya —
+  `"candidates: 2100 melebihi batas 2000"` — dan layanan menulis satu baris
+  `warn` `permintaan_terlalu_besar` dengan `request_id` dari sisi Go. Tanpa
+  itu ketiga batas tidak bisa dibedakan dari log, karena kode galatnya sama.
 
 ### 4.2 Respons
 
@@ -426,7 +430,7 @@ Amplop galat, dan hanya ini bentuknya:
 | `400` | `malformed_request` | **bug kita.** Log level `error`, langsung fallback, jangan retry. |
 | `401` | `unauthenticated` | Log `error`, fallback, jangan retry. |
 | `409` | `contract_version_unsupported` | Log `error`, fallback, jangan retry. Ini yang menangkap deploy tidak seiring. |
-| `422` | `problem_too_large` | Log `warn`, fallback. |
+| `422` | `problem_too_large` | Log `warn`, fallback. `message` menyebut batas mana yang dilanggar. |
 | `500` | `solver_failed` | Retry sekali, lalu fallback. |
 | `503` | `not_ready` | Retry sekali, lalu fallback. |
 | `504` / timeout / koneksi | — | Retry sekali, lalu fallback. |
