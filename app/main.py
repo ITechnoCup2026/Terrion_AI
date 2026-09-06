@@ -72,18 +72,54 @@ def envelope(code: str, message: str) -> dict:
     return {"error": {"code": code, "message": message}}
 
 
+def field_path(error: dict) -> str:
+    """Jalur field yang gagal, tanpa awalan "body" yang tidak memberi apa-apa."""
+    parts = [str(part) for part in error["loc"] if part != "body"]
+    return ".".join(parts) or "(badan permintaan)"
+
+
 @app.exception_handler(RequestValidationError)
 async def on_invalid_request(request: Request, exc: RequestValidationError):
-    """Petakan kegagalan validasi ke kode galat yang dijanjikan kontrak."""
-    too_large = any(error["type"] == "too_long" for error in exc.errors())
+    """Petakan kegagalan validasi ke kode galat yang dijanjikan kontrak.
+
+    Pesannya menyebut field dan angkanya, dan itu bukan hiasan. Ketiga batas
+    ukuran — 2000 kandidat, 400 baris permintaan, 3 objektif — jatuh ke kode
+    galat yang sama, jadi `422` tanpa nama field tidak bisa didiagnosis dari
+    log sama sekali: yang terbaca di Railway hanya "422 Unprocessable Entity"
+    tanpa satu pun baris yang menyebut batas mana yang dilanggar. Sisi Go
+    mencatat `warn` lalu jatuh ke solvernya sendiri, jadi tidak ada yang
+    rusak — tetapi juga tidak ada yang tahu apa yang harus diperbaiki.
+
+    `input` sengaja tidak ikut ke dalam pesan maupun log: isinya badan
+    permintaan, dan tidak ada data lahan yang perlu keluar lewat jalur galat.
+    Lihat tests/test_no_personal_data.py.
+    """
+    # Validasi gagal sebelum handler propose sempat mengikat request_id, jadi
+    # ia diikat di sini — kalau tidak, satu-satunya baris log tentang
+    # permintaan ini tidak bisa dirunut ke jejaknya di sisi Go.
+    request_id = request.headers.get("X-Request-Id")
+    if request_id:
+        bind_request(request_id)
+
+    errors = exc.errors()
+    too_large = [error for error in errors if error["type"] == "too_long"]
     if too_large:
+        detail = "; ".join(
+            f"{field_path(error)}: {error.get('ctx', {}).get('actual_length', '?')}"
+            f" melebihi batas {error.get('ctx', {}).get('max_length', '?')}"
+            for error in too_large
+        )
+        logger.warning("permintaan_terlalu_besar", detail=detail)
         return JSONResponse(
             status_code=422,
-            content=envelope("problem_too_large", "batas ukuran terlampaui"),
+            content=envelope("problem_too_large", detail),
         )
+
+    detail = "; ".join(f"{field_path(error)}: {error['msg']}" for error in errors[:3])
+    logger.warning("permintaan_cacat", detail=detail, jumlah=len(errors))
     return JSONResponse(
         status_code=400,
-        content=envelope("malformed_request", str(exc.errors()[:3])),
+        content=envelope("malformed_request", detail),
     )
 
 

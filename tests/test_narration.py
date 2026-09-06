@@ -152,3 +152,59 @@ def test_the_provider_name_decides_the_dialect(monkeypatch):
 
     monkeypatch.setattr(settings, "llm_api_key", "")
     assert type(providers.get_provider("sumopod")) is providers.Template
+
+
+def test_a_provider_that_rejects_the_key_says_so_at_boot(monkeypatch):
+    """Regresi produksi: kunci yang ditolak hanya terlihat sebagai narasi gagal.
+
+    Di Railway, `LLM_API_KEY` yang salah menghasilkan empat baris
+    `401 Unauthorized` per permintaan — tiga narasi dan satu lapis tujuan —
+    dan tidak satu pun menyebut bahwa penyebabnya kredensial, bukan model
+    atau jaringan. Pemanasan sudah memanggil `/models` dengan kunci yang
+    sama sebelum ada pengguna yang menunggu; kalau di sana pun ia ditolak,
+    itu harus keluar sebagai peringatan sekali, saat proses hidup.
+    """
+    import httpx
+    import structlog
+
+    from app.agent import providers
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "kunci-salah")
+    monkeypatch.setattr(settings, "llm_base_url", "https://contoh.invalid/v1")
+
+    class FakeClient:
+        async def get(self, url, headers=None, timeout=None):
+            return httpx.Response(401, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(providers, "shared_client", FakeClient)
+
+    with structlog.testing.capture_logs() as baris:
+        asyncio.run(providers.warm_client())
+
+    ditolak = [b for b in baris if b["event"] == "kredensial_penyedia_ditolak"]
+    assert ditolak, f"tidak ada peringatan kredensial; yang ada: {baris}"
+    assert ditolak[0]["status"] == 401
+    assert ditolak[0]["log_level"] == "warning"
+
+
+def test_a_warm_up_that_succeeds_stays_quiet(monkeypatch):
+    """Pemanasan yang berhasil tidak boleh menambah kebisingan log."""
+    import httpx
+    import structlog
+
+    from app.agent import providers
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "llm_api_key", "kunci-benar")
+
+    class FakeClient:
+        async def get(self, url, headers=None, timeout=None):
+            return httpx.Response(200, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(providers, "shared_client", FakeClient)
+
+    with structlog.testing.capture_logs() as baris:
+        asyncio.run(providers.warm_client())
+
+    assert [b for b in baris if b["event"] == "kredensial_penyedia_ditolak"] == []

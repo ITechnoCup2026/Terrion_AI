@@ -103,3 +103,47 @@ def test_a_request_with_no_demand_still_returns_three_plans(client, golden_reque
 
     assert len(body["plans"]) == 3
     assert all(p["metrics"]["demand_covered_kg"] == 0 for p in body["plans"])
+
+
+def test_a_too_large_request_says_which_limit_it_broke(client, golden_request):
+    """Regresi produksi: `422` yang tidak menyebut apa-apa tak bisa didiagnosis.
+
+    Di Railway, lima `422 Unprocessable Entity` beruntun pada
+    `/v1/plan/propose` hanya memberi kodenya. Ketiga batas — 2000 kandidat,
+    400 baris permintaan, 3 objektif — jatuh ke pesan yang persis sama, dan
+    penangannya tidak menulis satu baris log pun. Tidak ada cara mengetahui
+    batas mana yang dilanggar tanpa menebak. Pesannya harus menyebut field
+    dan angkanya.
+    """
+    rusak = deepcopy(golden_request)
+    contoh = rusak["candidates"][0]
+    rusak["candidates"] = [contoh | {"id": f"c{i + 10000}"} for i in range(2001)]
+
+    response = client.post("/v1/plan/propose", json=rusak, headers=AUTH)
+    pesan = response.json()["error"]["message"]
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "problem_too_large"
+    assert "candidates" in pesan
+    assert "2001" in pesan and "2000" in pesan
+
+
+def test_a_too_large_demand_names_demand_and_not_candidates(client, golden_request):
+    """Batas yang berbeda harus bisa dibedakan dari pesannya saja."""
+    rusak = deepcopy(golden_request)
+    rusak["demand"] = [rusak["demand"][0]] * 401
+
+    pesan = client.post("/v1/plan/propose", json=rusak, headers=AUTH).json()["error"]["message"]
+
+    assert "demand" in pesan
+    assert "candidates" not in pesan
+
+
+def test_a_malformed_request_says_which_field_is_wrong(client, golden_request):
+    """`400` menanggung masalah yang sama: sisi Go butuh nama fieldnya."""
+    rusak = deepcopy(golden_request)
+    rusak["candidates"][3]["plot_ref"] = "lahan-7"
+
+    pesan = client.post("/v1/plan/propose", json=rusak, headers=AUTH).json()["error"]["message"]
+
+    assert "candidates" in pesan and "plot_ref" in pesan
