@@ -13,6 +13,9 @@ CONTRACT_VERSION = "1.0"
 CONTRACT_MAJOR = "1"
 
 MAX_CANDIDATES = 2000
+# Panjang tujuan bahasa bebas. Cukup untuk satu-dua kalimat pengurus,
+# cukup pendek untuk tidak membengkakkan prompt lapis tujuan.
+MAX_GOAL_CHARS = 500
 MAX_DEMAND_ROWS = 400
 
 Ref = Annotated[str, Field(pattern=r"^[pkv][0-9]+$")]
@@ -89,6 +92,9 @@ class ProposeRequest(Base):
     seed: int
     season: Season
     objectives: list[Objective] = Field(min_length=1, max_length=3)
+    # Tujuan pengurus dalam bahasa biasa. Kosong berarti bobot bawaan;
+    # terisi berarti lapis tujuan menerjemahkannya menjadi bobot.
+    goal: str | None = Field(default=None, max_length=MAX_GOAL_CHARS)
     capacity_tonnes_per_week: float | None = None
     candidates: list[Candidate] = Field(max_length=MAX_CANDIDATES)
     demand: list[DemandRow] = Field(default_factory=list, max_length=MAX_DEMAND_ROWS)

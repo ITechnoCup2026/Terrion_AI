@@ -11,7 +11,10 @@ def test_ready_reports_the_contract_version(client):
     body = client.get("/ready").json()
 
     assert body["contract_version"] == "1.0"
-    assert body["cpsat"] is False  # Fase 1: greedy saja
+    # Fase 2: CP-SAT terpasang sebagai dependensi utama, jadi /ready harus
+    # mengakuinya. Kalau ini gagal, ortools hilang dari lingkungan dan
+    # layanan diam-diam turun ke solver cadangan.
+    assert body["cpsat"] is True
 
 
 def test_propose_without_a_token_is_rejected(client, golden_request):

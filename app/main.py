@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.agent.explain import narrate_all
+from app.agent.intent import derive_weights
 from app.agent.providers import aclose_client, get_provider, warm_client
 from app.config import settings
 from app.contracts.v1 import (
@@ -23,7 +24,7 @@ from app.logging import bind_request, configure_logging, logger
 from app.problem import Problem
 from app.risk.montecarlo import peak_quantiles
 from app.security import require_token
-from app.solver import cpsat_available, solve_all
+from app.solver import cpsat_available, solve_all, warm_solver
 from app.solver.metrics import plan_result
 
 configure_logging(settings.log_level)
@@ -31,7 +32,7 @@ configure_logging(settings.log_level)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Panaskan koneksi ke penyedia lebih dulu, lalu tutup rapi di akhir.
+    """Panaskan solver dan koneksi penyedia lebih dulu, lalu tutup rapi di akhir.
 
     Handshake TLS pertama sebuah proses terukur 1,4 detik. Kalau ia dibayar
     di dalam permintaan pertama, ia dibayar dari anggaran narasi yang
@@ -51,8 +52,13 @@ async def lifespan(app: FastAPI):
     if get_provider(settings.llm_provider).is_remote:
         warming = asyncio.create_task(warm_client())
 
+    # CP-SAT dimuat di utas terpisah supaya 549 ms impornya tidak menahan
+    # /health, dengan alasan yang sama seperti pemanasan klien di atas.
+    loading = asyncio.create_task(asyncio.to_thread(warm_solver))
+
     yield
 
+    loading.cancel()
     if warming is not None:
         warming.cancel()
     await aclose_client()
@@ -119,7 +125,15 @@ async def propose(payload: ProposeRequest, request: Request):
         )
 
     problem = Problem.from_request(payload)
-    solutions, solver_name, status_name, evaluations = solve_all(problem, payload.seed)
+
+    # Lapis tujuan lebih dulu, karena solver membutuhkan bobotnya. Ia hanya
+    # berjalan kalau pengurus benar-benar menulis sesuatu; tanpa itu tidak ada
+    # panggilan model sama sekali dan anggaran waktunya utuh untuk narasi.
+    weights, intent_reason = await derive_weights(payload.goal)
+
+    solutions, solver_name, status_name, evaluations = solve_all(
+        problem, payload.seed, weights
+    )
 
     plans = []
     for objective in problem.objectives:
@@ -127,7 +141,18 @@ async def propose(payload: ProposeRequest, request: Request):
         p50, p90 = peak_quantiles(chosen, problem, settings.monte_carlo_draws, payload.seed)
         plans.append(plan_result(objective, chosen, problem, p50, p90))
 
-    plans, degraded = await narrate_all(plans, problem)
+    # Sisa anggaran, bukan anggaran tetap. Lapis tujuan dan solver sudah
+    # memakai bagiannya, dan sisi Go menutup seluruh panggilan pada 3,5 detik —
+    # jadi narasi mendapat apa yang tersisa, bukan jatah yang mengabaikan
+    # keduanya. Tanpa ini, permintaan bertujuan bebas akan menembus batas Go
+    # dan seluruh responsnya hilang, yang jauh lebih buruk daripada narasi
+    # templat.
+    spent_ms = int((time.perf_counter() - started) * 1000)
+    remaining_ms = settings.request_budget_ms - spent_ms
+
+    plans, degraded = await narrate_all(plans, problem, budget_ms=remaining_ms)
+    if intent_reason:
+        degraded.insert(0, f"tujuan:{intent_reason}")
 
     elapsed = int((time.perf_counter() - started) * 1000)
     logger.info(

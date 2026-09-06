@@ -101,6 +101,14 @@ class Template:
         """Kembalikan kalimat templat; ia tidak pernah terpotong."""
         return Draft(template_narrative(facts))
 
+    async def complete(self, prompt: str, max_tokens: int) -> str:
+        """Tidak ada model bahasa di sini, jadi tidak ada jawaban.
+
+        Pemanggil memeriksa `is_remote` lebih dulu; ini jaring pengaman supaya
+        antarmukanya tetap sama untuk kedua penyedia.
+        """
+        return ""
+
 
 _client: httpx.AsyncClient | None = None
 
@@ -196,19 +204,38 @@ class OpenAICompatible:
         """Kredensial saja; tidak ada penyedia yang menolak header ini."""
         return {"Authorization": f"Bearer {settings.llm_api_key}"}
 
-    async def narrate(self, facts: Facts) -> Draft:
-        """Minta satu paragraf ke model bahasa; keluarannya belum dipercaya."""
+    async def _chat(self, body: dict) -> tuple[str, bool]:
+        """Satu panggilan /chat/completions: teksnya, dan apakah ia terpotong."""
         response = await shared_client().post(
             settings.llm_base_url.rstrip("/") + "/chat/completions",
-            json=self.payload(facts),
+            json=body,
             headers=self.headers(),
         )
         response.raise_for_status()
         choice = response.json()["choices"][0]
-        return Draft(
-            text=(choice["message"].get("content") or "").strip(),
-            truncated=choice.get("finish_reason") == "length",
+        return (
+            (choice["message"].get("content") or "").strip(),
+            choice.get("finish_reason") == "length",
         )
+
+    async def narrate(self, facts: Facts) -> Draft:
+        """Minta satu paragraf ke model bahasa; keluarannya belum dipercaya."""
+        text, truncated = await self._chat(self.payload(facts))
+        return Draft(text=text, truncated=truncated)
+
+    async def complete(self, prompt: str, max_tokens: int) -> str:
+        """Satu jawaban bebas untuk prompt apa pun, dipakai lapis tujuan.
+
+        Sengaja memakai badan permintaan yang sama polosnya dengan narasi, dan
+        lewat kelas yang sama, supaya kekhasan tiap penyedia (OpenRouter) tetap
+        berlaku tanpa disalin ulang.
+        """
+        body = self.payload(_PROMPT_ONLY) | {
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        text, _ = await self._chat(body)
+        return text
 
 
 class OpenRouter(OpenAICompatible):
@@ -243,6 +270,25 @@ class OpenRouter(OpenAICompatible):
             "HTTP-Referer": "https://github.com/ITechnoCup2026",
             "X-Title": "Terrion",
         }
+
+
+# Fakta boneka untuk membangun badan permintaan lapis tujuan: payload()
+# meminta sebuah Facts demi seed dan prompt, dan keduanya diganti sesudahnya.
+# Seed tetap: tujuan yang sama sebaiknya menghasilkan bobot yang sama.
+_PROMPT_ONLY = Facts(
+    objective="aman",
+    plots=0,
+    varieties=0,
+    first_harvest_week="",
+    last_harvest_week="",
+    harvest_weeks=0,
+    peak_p50=0.0,
+    peak_p90=0.0,
+    capacity=None,
+    total_tonnes=0.0,
+    demand_covered_kg=0,
+    seed=0,
+)
 
 
 REMOTE = {
